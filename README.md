@@ -1,9 +1,17 @@
 # Monte-Carlo-Algorithm-Spherocylinders
 Fortran Code: Monte Carlo Algorithm Spherocylinders
 
-# Results
+# Preview
 <p align="center">
-  <img src="Rsult/1.jpg" width="520">
+  <img src="Result/1.png" width="320">
+</p>
+
+<p align="center">
+  <img src="Result/2.png" width="320">
+</p>
+
+<p align="center">
+  <img src="Result/3.png" width="320">
 </p>
 
 
