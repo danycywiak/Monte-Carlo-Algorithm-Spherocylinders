@@ -1,1 +1,36 @@
 
+1000 999 1                         N, nrods, nspheres
+1  0                                NRUN, IAV
+F 36 20 2                           LFCC,NCX,NCY,NCZ
+0.09001D0                           ETA
+0.900                               TEMP
+0.10                               PRESS
+5.d0 0.d0                           XLOVERD_rod,xloverd_sph
+10000 1000 0 1000 1000              MOVES,MOVES1,NEQUIL,NSUB,NGOFR
+0.1 0.2 1.5D-2 1.0D-2  T            DISPL_R, DISPL_S, DISPTH, DISPLS, LCORRECT 
+T                                   LORDER
+F 200                               LGOFR,NHISTG
+F F 10.                             LVOL,LBOX, SIGLI00
+F 0.001d0 0.001d0                  DYNAMIC, delta_time_rod, delta_time_sph
+200  0.01  0.60                     NHISTE,ETASTA,ETAEND
+134356789 13345		    	    ISEED_MC1,ISEED_MC2
+20			    	    istart_max
+5  F  F                             NLRANGE, LCHIRAL, LWALL
+3.8d0 0.5 2.74785 0.546528d0                  IF(NLRANGE.EQ.9)
+                                           FUG,DP,CHIX,E0
+
+
+
+
+
+1.0  1.0  20.0                      XNU, XMU, XKP
+
+-1.0D0 1.5D0                        WELL, SWRANGE
+1.0D0		      		    ECHIRAL
+
+1.d0 0.5 2.74785 0.546528                  IF(NLRANGE.EQ.8)
+                                           FUG,DP,CHIX,E0
+
+
+
+100000 5000 1000 1000             MOVES,NEQUIL,NSUB,NGOFR
