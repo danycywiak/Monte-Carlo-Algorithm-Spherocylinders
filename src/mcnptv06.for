@@ -1,1 +1,3700 @@
 
+      PROGRAM MCNPTV06
+
+      INCLUDE 'mcnptv06.inc'
+
+      DATA IFINS/0/
+      NCALLN=0
+      ISEED=-123456789 
+
+!      CALL MOD_PART          ! Create a new random configuration starting from a configuration containing only rods!!!!
+!      STOP
+
+      CALL START             ! Inputs and setting up of the initial configuration, if needed
+      CALL SLIST(1)          ! List of neighbours for each particle
+      CALL OVERLAP           ! Looks for overlaps. It calls DMIN and ENERGY 
+
+      CALL MCARLO            ! NVT and NPT
+
+      CALL FINISH(IFINS)     ! Saves the final configurations and the accumulators
+
+      IF (LGOFR) CALL RADIAL 
+
+      CALL OVERLAP
+
+      STOP
+      END
+
+!     ********************************************
+!     ********************************************
+!     ********************************************
+
+      SUBROUTINE MOD_PART
+
+      INCLUDE 'mcnptv06.inc'
+
+      integer part_new
+            
+      OPEN(UNIT=3,FILE='snapshot.old',STATUS='UNKNOWN')
+      
+      part_new=1000
+      nrods=999
+      nsph=1
+
+      READ(3,*) part_new,AAA,BBB,CCC
+      READ(3,*) DISPL_R,DISPL_S, DISPTH, DISPLS
+      READ(3,*) XC, YC, ZC
+
+      DO I=1,part_new
+         READ(3,*) RX(I),RY(I),RZ(I)
+       END DO   
+ 
+      DO I=1,part_new
+         READ(3,*) EX(I),EY(I),EZ(I)
+      END DO
+
+      CLOSE (3)
+
+      OPEN(UNIT=3,FILE='snapshot.old',STATUS='UNKNOWN')
+
+      write (3,*) part_new,nrods,nsph
+      write (3,*) DISPL_R,DISPL_S, DISPTH, DISPLS
+      write (3,*) XC, YC, ZC
+
+      DO I=1,part_new
+         if (I.le.nrods) xloverd(I)=5.d0
+         if (I.gt.nrods) xloverd(I)=0.0d0
+         write (3,7558) RX(I),RY(I),RZ(I),xloverd(I)
+       END DO   
+ 
+      DO I=1,part_new
+         if (I.le.nrods) then
+           write (3,*) EX(I),EY(I),EZ(I)
+	 else
+           write (3,*) 0.d0,0.d0,1.d0
+	 end if
+      END DO
+
+      CLOSE (3)
+
+ 7558 FORMAT(1X,4(6x,F24.16))
+
+      RETURN
+
+      END
+
+!     ********************************************
+!     ********************************************
+
+      SUBROUTINE START
+
+      INCLUDE 'mcnptv06.inc'
+
+      DIMENSION XA(6),YA(6),ZA(6)
+
+      PI=4.D0*DATAN(1.d0)  
+      TWOPI=2.0D0*PI
+
+      OPEN (UNIT=499,FILE='acceptn.dat',ACCESS='APPEND',
+     +     FORM='FORMATTED')
+      OPEN (UNIT=304,FILE='acceptn2.dat',ACCESS='APPEND',
+     +     FORM='FORMATTED')
+      OPEN (UNIT=49,FILE='mc-ave.dat',ACCESS='APPEND',
+     +     FORM='FORMATTED')
+      OPEN (UNIT=38,FILE='mc-ord.dat',ACCESS='APPEND',
+     +     FORM='FORMATTED')
+
+C     ZERO ACCUMULATORS
+      DO 1 I=1,NACC
+         ACC(I)=0.0D0
+ 1    CONTINUE
+
+      DO 2 I=1,15
+         DO 22 J=1,NG
+            G(I,J)=0.0D0
+ 22      CONTINUE
+ 2    CONTINUE
+
+      DO 3 I=1,NG
+         GOM(I)=0.d0
+         GM(I)=0.d0
+ 3    CONTINUE
+
+      DO 94 I=1,10
+         DO 942 J=1,NG
+            GO(I,J)=0.0D0
+ 942     CONTINUE
+ 94   CONTINUE
+
+      DO 13 I=1,NE
+         XNE(I)=0.0D0
+ 13   CONTINUE
+
+
+C     READ INPUT PARAMETERS 
+
+      OPEN (UNIT=1,FILE='mcnptv06.inp',FORM='FORMATTED',STATUS='OLD')
+
+      READ(1,*) N,nrods,nsph
+      READ(1,*) NRUN,IAV
+      READ(1,*) LFCC,NCX,NCY,NCZ
+      READ(1,*) RHO
+      READ(1,*) TEMP
+      READ(1,*) PRESS
+      READ(1,*) XLOVERD_rod,xloverd_sph
+      READ(1,*) NCICLOS,NMOVE1,NEQC,NSUBC,NGOFRC
+      READ(1,*) DISPL_R,DISPL_S,DISPTH,DISPLS,LCORRECT
+      READ(1,*) LORDER
+      READ(1,*) LGOFR,NHISTG
+      READ(1,*) LVOL,LBOX,SIGLI00
+      READ(1,*) DYNAMIC,delta_time_rod,delta_time_sph
+      READ(1,*) NHISTE,RHOSTA,RHOEND
+      READ(1,*) ISEED_MC1,ISEED_MC2
+      READ(1,*) istart_max	
+
+
+      NMOVE=N*NCICLOS
+      NEQUIL=N*NEQC
+      NSUB=NSUBC*N
+      NGOFR=NGOFRC*N
+      NVOL=N
+
+      XLD2_rod=XLOVERD_rod/2.0D0
+      XK_rod=XLOVERD_rod+1.0D0
+      XK2_rod=XK_rod/2.d0
+      XLD2_sph=XLOVERD_sph/2.0D0
+      XK_sph=XLOVERD_sph+1.0D0
+
+      XN=DFLOAT(N)
+      XN_rods=DFLOAT(Nrods)
+      XN_sph=DFLOAT(Nsph)
+      XHISTG=DFLOAT(NHISTG)
+      XHISTE=DFLOAT(NHISTE) 
+      
+      if(N.gt.npart) then
+         write(*,*) 'Number of particles out of dimension'
+         write(*,*) 'Maximun limit ',Npart
+         write(*,*) 'Change npart in inc file and recompile the code'
+         stop
+      endif
+      
+
+      READ(1,*) NLRANGE
+
+C     NLRANGE = 3 => Hard SC with normal periodic boundary conditions
+C     NLRANGE = 4 => SWSC with normal periodic boundary conditions
+C     NLRANGE = 5 => Repulsive Kihara with normal periodic boundary conditions
+C     NLRANGE = 6 => Kihara with normal periodic boundary conditions
+C     NLRANGE = 7 => Kihara with Gay-Berne type of anisotropic well
+C     NLRANGE = 8 => Gay-Berne potential
+C     NLRANGE = 9 => HSC+Polymers in one component formalism (JCP 124, 505620 (2006))
+
+      IF(NLRANGE.EQ.4) THEN
+         READ(1,*) WELL, SWRANGE
+         SWRANGE2=SWRANGE*SWRANGE
+      ENDIF
+
+*     Parameters that define the Gay-Berne type anisotropy of the well
+
+      IF(NLRANGE.EQ.7.OR.NLRANGE.EQ.8) THEN
+         READ(1,*) XNU, XMU, XKP
+         CHI=(XK_rod*XK_rod-1.d0)/(XK_rod*XK_rod+1.d0)
+         CHIP=(XKP**(1.d0/XMU)-1.d0)/(XKP**(1.d0/XMU)+1.d0)
+         IF(NLRANGE.EQ.8) THEN
+            CHIP=(XKP**(-1./XMU)-1.)/(XKP**(-1./XMU)+1.)
+         ENDIF
+      ENDIF
+
+      IF(NLRANGE.EQ.9) THEN
+         READ(1,*) FUG,DP,CHIX,E0
+         dm=(1.d0+dp)           ! the value of dp is given in the *.inp file 
+      ENDIF        
+
+      CLOSE (UNIT=1) 
+
+      IF(NLRANGE.EQ.3) POTRANGE=1.d0
+      IF(NLRANGE.EQ.4) POTRANGE=SWRANGE
+      IF(NLRANGE.EQ.5) POTRANGE= (2.d0)**(1.d0/6.d0)
+      IF(NLRANGE.EQ.6) POTRANGE= 3.D0 
+      IF(NLRANGE.EQ.7) POTRANGE= 3.D0 
+      IF(NLRANGE.EQ.8) POTRANGE= 3.D0 
+      IF(NLRANGE.EQ.9) POTRANGE= 1.d0+dp
+
+      POTRANGE2=POTRANGE*POTRANGE 
+      
+C     POTRANGE is equal to 1.5 if NLRANGE.EQ.9
+
+*     estimated volume of the molecules
+
+      VM_rod=PI*(1.0D0/6.0D0+XLOVERD_rod/4.0D0)
+      VM_sph=PI*(1.0D0/6.0D0+XLOVERD_sph/4.0D0)
+ 
+      VM=(XN_rods*VM_rod+XN_sph*VM_sph)/XN
+
+      SIGLI=max(2.d0*(POTRANGE+MAX(1.D0,XLOVERD_rod)),sigli00)
+
+C     CAUTION, SIGLI HAS TO BE SMALLER THAN THE MINIMUN SIZE OF THE BOX
+C     ALONG THE SIMULATION     
+      
+
+*     RC is the radius for neighbour list
+      RC=POTRANGE+MAX(1.D0,XLOVERD_rod)+1.D0
+      RCRC=RC*RC
+
+C     RC is equal to 7.5 for NLRANGE.EQ.9
+
+C     WRITE OUT PARAMETERS
+
+      IF(NLRANGE.EQ.3) WRITE(49,191)
+      IF(NLRANGE.EQ.4) WRITE(49,192)
+      IF(NLRANGE.EQ.5) WRITE(49,193)
+      IF(NLRANGE.EQ.6) WRITE(49,194)
+      IF(NLRANGE.EQ.7) WRITE(49,195)
+      IF(NLRANGE.EQ.8) WRITE(49,197)
+      IF(NLRANGE.EQ.9) WRITE(49,196)
+      
+      IF (.NOT.LVOL) THEN
+         WRITE(49,101)
+      ELSE 
+         WRITE(49,102)
+      END IF
+
+
+
+      OPEN(UNIT=3,FILE='snapshot.old',FORM='FORMATTED',STATUS='OLD')
+         
+      READ(3,*) NN,nnrods,nnsph
+         
+      IF(NN.NE.N.OR.nnrods.NE.nrods.OR.nnsph.ne.nsph) THEN
+         WRITE(*,*) 'INCONSISTENT N OR XLORVERD IN SNAPSHOT.OLD'
+         WRITE(*,*) nn,nnrods,nnsph
+         STOP
+      ENDIF
+         
+      READ(3,*) DISPL_R,DISPL_S, DISPTH, DISPLS
+      READ(3,*) XC, YC, ZC
+         
+      XC2=XC/2.0D0
+      YC2=YC/2.0D0
+      ZC2=ZC/2.0D0
+
+      DO I=1,N
+        READ(3,*) RX(I),RY(I),RZ(I),xloverd(I)
+      END DO
+
+      DO I=1,N
+        READ(3,*) EX(I),EY(I),EZ(I)
+        STHETA(I)=DSQRT(1.0D00-EZ(I)*EZ(I))
+      END DO
+
+      CLOSE (3)
+
+
+      VOLME=XC*YC*ZC
+      RHO=XN/VOLME           ! Density
+      ETA=(XN_rods*VM_rod+XN_sph*VM_sph)/VOLME
+
+
+*     PARAMETERS FOR RADIAL DISTRIBUTIONS
+
+      BMIN=DMIN1(XC,YC,ZC)
+      AHI=BMIN/2.D0
+      AHI2=AHI*AHI
+
+*     TOLERANCES FOR DISTRIBUTIONS PARALLEL AND PERP. TO DIRECTOR
+
+      RNMAX=0.5D0
+      RNMAX2=AHI
+      RPMAX=0.5D0
+      RPMAX2=AHI
+
+C     WRITE CONTENT OF INPUT FILE
+
+      write(49,*) '***************'
+      write(49,*) 'CONTENT OF INPUT FILE'
+      write(49,*) N,nrods,nsph
+      write(49,*) NRUN,IAV
+      write(49,*) LFCC,NCX,NCY,NCZ
+      write(49,*) RHO
+      write(49,*) TEMP
+      write(49,*) PRESS
+      write(49,*) XLOVERD_rod,XLOVERD_sph 
+      write(49,*) XK_rod,XK_sph
+      write(49,*) NCICLOS,NEQC,NSUBC,NGOFRC
+      write(49,*) DISPL_R,DISPL_S, DISPTH, DISPLS,LCORRECT
+      write(49,*) LGOFR, NHISTG
+      write(49,*) LORDER,LSME
+      write(49,*) LVOL,LBOX
+      write(49,*) DYNAMIC,delta_time_rod,delta_time_sph
+      write(49,*) NHISTE,RHOSTA,RHOEND
+      write(49,*) NLRANGE
+
+      IF(NLRANGE.EQ.4) write(49,*) WELL, SWRANGE	   
+      IF(NLRANGE.EQ.7.OR.NLRANGE.EQ.8)write(49,*) XNU, XMU, XKP
+      IF(NLRANGE.EQ.9) WRITE(49,*) FUG,DP,CHIX,E0
+
+      WRITE (49,*) '-----------------------------------------------------
+     +     ----------------------------'
+      WRITE(49,103) N,RHO,ETA,TEMP,NRUN,NMOVE,NSUB
+      WRITE(49,1031) DISPL_R,DISPL_S,DISPTH
+
+      IF(NRUN.EQ.0) THEN
+         WRITE(49,105)
+	 WRITE(49,1033) IAV,NAC,NCX,NCY,NCZ,NGOFR,LGOFR,LORDER
+      ELSE
+         WRITE(49,106)
+	 WRITE(49,1034) IAV,NGOFR,LGOFR,LORDER
+      ENDIF
+
+      WRITE(49,*) ' RC=',RC
+
+      WRITE(49,*) ' LENGTH TO DIAMETER RATIO, L/D=',XLOVERD_rod,xloverd_sph
+
+      IF (LVOL) WRITE(49,104) NVOL,LVOL,NHISTE,RHOSTA,RHOEND,
+     +     PRESS,DISPLS
+      IF(NRUN.EQ.0) THEN
+         WRITE(49,*) 'ZSTEP=' ,ZSTEP
+         WRITE(49,*) 'LATTICE PARAMETERS'
+         WRITE(49,*)(XA(I),YA(I),ZA(I),I=1,NAC)
+      ENDIF
+
+      WRITE(49,*) ' '
+      WRITE (49,*) '-----------------------------------------------------
+     +     ----------------------------'
+
+      IF (IAV.EQ.0)  WRITE(49,107)
+      IF (IAV.NE.0)  WRITE(49,108)
+      IF (LGOFR)     WRITE(49,109) NHISTG
+
+      IF (LORDER) THEN
+         CALL ORDER
+         WRITE(49,*) ' INITIAL VALUE OF THE ORDER PARAMETER P2=',P2
+         WRITE(49,*) ' INITIAL DIRECTION VECTOR'
+         WRITE(49,*) DIX,DIY,DIZ
+      END IF
+
+*     RTEST is the maximum displacement that will be allowed for any
+*     particle without updating of neighbour list
+
+      IF (LVOL) THEN
+         RTESTV=-(POTRANGE+MAX(1.D0,XLOVERD_rod))/4.0D00*dexp(DISPLS)
+      ELSE
+         RTESTV=0.0D00
+      ENDIF           
+
+      RTEST=(RC-POTRANGE-MAX(1.D0,XLOVERD_rod))/2.d0
+*     +      -DSQRT(3.0D00)*DISPL/2.0D00+RTESTV
+
+      IF (RTEST.LE.0) THEN  
+         WRITE(6,*) 'RTEST=',RTEST,RTESTV, 
+     1        RC-POTRANGE-MAX(1.D0,XLOVERD_rod),RC
+         STOP
+      ENDIF
+
+      RRTEST=RTEST*RTEST
+
+C     WRITE OUT CONVERTED UNITS
+
+      WRITE(49,114) ETA, RHO
+      WRITE(49,116) XC,YC,ZC
+      WRITE(49,115) YC/XC,ZC/XC,ZC/YC
+      WRITE(*,114) ETA, RHO
+      WRITE(*,116) XC,YC,ZC
+      WRITE(*,115) YC/XC,ZC/XC,ZC/YC
+
+      WRITE(49,*) 'LIMITE INFERIOR DE LA CAJA', SIGLI
+      WRITE(49,*) 'RADIO DE LA LISTA DE VECINOS ', RC
+      WRITE(49,*) 'RTEST ', RTEST
+      
+ 191  FORMAT(1X,'*********************************************',/
+     +     ,' ***   MC SIMULATION OF HSC              ***',/
+     +     ,' *********************************************',/,/)
+ 192  FORMAT(1X,'*********************************************',/
+     +     ,' ***   MC SIMULATION OF SWSC              ***',/
+     +     ,' *********************************************',/,/)
+ 193  FORMAT(1X,'*********************************************',/
+     +     ,' ***   MC SIMULATION OF SRS              ***',/
+     +     ,' *********************************************',/,/)
+ 194  FORMAT(1X,'*********************************************',/
+     +     ,' ***   MC SIMULATION OF KIHARA              ***',/
+     +     ,' *********************************************',/,/)
+ 195  FORMAT(1X,'*********************************************',/
+     +     ,' ***   MC SIMULATION OF GB-K              ***',/
+     +     ,' *********************************************',/,/)
+ 197  FORMAT(1X,'*********************************************',/
+     +     ,' ***   MC SIMULATION OF GB                ***',/
+     +     ,' *********************************************',/,/)
+ 196  FORMAT(1X,'*********************************************',/
+     +     ,' ***  MC SIMULATION OF HSC+POLYMERS       ***',/
+     +     ,' ***  IN ONE COMPONENT FORMALISM       ***',/
+     +     ,' *********************************************',/,/)
+ 101  FORMAT(1X,'NVT ENSEMBLE',/)
+ 102  FORMAT(1X,'NPT ENSEMBLE',/)
+ 103  FORMAT(1X,'N= ',I6,'RHO= ',F12.8,' ETA= ',F12.8,' TEMP= ',F12.8,/,
+     +     1X,'NRUN= ',I4,' NMOVE= ',I10,' NSUB= ',I9)
+ 1031 FORMAT(1X,'DISPL_R= ',F10.6,'DISPL_S= ',F10.6,' DISPTH= ',F10.6)
+ 1033 FORMAT(1X,'IAV= ',I4,' NAC,NCX,NCY,NCZ= ',4I4,/,
+     +     1X,'NGOFR= ',I9,' LGOFR= ',L2,' LORDER= ',L2)
+ 1034 FORMAT(1X,'IAV= ',I4,1X,'NGOFR= ',I9,' LGOFR= ',L2,' LORDER= ',L2)
+ 104  FORMAT(1X,'NVOL=',I12,' LVOL=',L2,/,
+     +     1X,'NHISTE=',I4,' RHOSTA=',F12.6,' RHOEND=',F12.6,/,
+     +     1X,'PRESS=',E20.6,' DISPLS=',F12.6,/)
+ 105  FORMAT(/,1X,'STARTING FROM A LATTICE',/)
+ 106  FORMAT(/,1X,'STARTING FROM AN OLD CONFIGURATION',/)
+ 107  FORMAT(1X,'ACCUMULATORS ZEROED',/)
+ 108  FORMAT(1X,'AVERAGING CONTINUED',/)
+ 109  FORMAT(1X,'CALCULATES G(R)','    NHISTG=',I4,/)
+ 121  FORMAT(2X,'START WITH FINAL INCREMENTS FROM PREVIOUS RUN',/)
+ 122  FORMAT(2X,'DISPL_R= ',F12.8,'DISPL_S= ',F12.8,'DISPTH= ',
+     +          F12.8,'DISPLS= ',F12.8,/)
+ 111  FORMAT(1X,'PREVIOUS NUMBER OF CONFIGURATIONS',F12.0,/)
+ 114  FORMAT(/,1X,'ETA=',F12.8,' RHO=',F12.8,/)
+ 115  FORMAT(1X,'BOX LENGTH RATIOS',8X,'YC/XC=',F12.8,' ZC/XC=',F12.8,
+     +     ' ZC/YC=',F12.8,/)
+ 116  FORMAT(1X,'BOX LENGTHS IN UNITS OF SIGMA ',8X,'XC=',F12.8,' YC='
+     +     ,F12.8,' ZC=',F12.8,/)
+
+      RETURN
+
+      END
+
+!     *****************************************************************************
+!     *****************************************************************************
+
+      SUBROUTINE MCARLO
+
+      INCLUDE 'mcnptv06.inc'
+
+      DATA IFIN/1/
+
+      integer, parameter :: kk3=100
+
+      integer, dimension(NMOVE1)  :: ncount2,icount
+
+      real, dimension(NMOVE1)     :: DIXo,DIYo,DIZo
+      real, dimension(N,NMOVE1)   :: exo,eyo,ezo
+      real, dimension(N,NMOVE1)   :: rxold,ryold,rzold
+      real, dimension(NMOVE1)     :: DELTAxcm,DELTAycm,DELTAzcm
+      real, dimension(NMOVE1)     :: xcm0,ycm0,zcm0
+
+      real, dimension(N,0:5000)   :: n_istogr_parnem_rod
+      real, dimension(N,0:5000)   :: n_istogr_pernem_rod
+      real, dimension(N,0:5000)   :: n_istogr_parnem_sph
+      real, dimension(N,0:5000)   :: n_istogr_pernem_sph
+      real, dimension(N,0:5000)   :: parnem_istogr_avg_rod
+      real, dimension(N,0:5000)   :: pernem_istogr_avg_rod
+      real, dimension(N,0:5000)   :: parnem_istogr_avg_sph
+      real, dimension(N,0:5000)   :: pernem_istogr_avg_sph
+      real, dimension(NMOVE1)     :: istogr_parnem_max
+      real, dimension(NMOVE1)     :: istogr_pernem_max
+
+      integer, dimension(NMOVE1)  :: imaxtot
+      integer, dimension(kk3)     :: navg1,navg2
+
+      real, dimension(kk3)    :: xymsd_avg_rod,zmsd_avg_rod
+      real, dimension(kk3)    :: xyzmsd_avg_rod,xyzmsd_avg_sph
+      real, dimension(kk3)    :: parnemmsd_avg_rod
+      real, dimension(kk3)    :: pernemmsd_avg_rod
+      real, dimension(kk3)    :: parnemmsd_avg_sph
+      real, dimension(kk3)    :: pernemmsd_avg_sph
+      real, dimension(kk3)    :: parmsd_avg_rod
+      real, dimension(kk3)    :: permsd_avg_rod
+      real, dimension(kk3)    :: orien_avg,orien2_avg
+      real, dimension(kk3)    :: orien_avg_dirnem
+
+
+!     ************************************************
+!     ************************************************
+
+      IF (DYNAMIC) THEN
+
+!     ******** COMPUTE DIFFUSION COEFFICIENTS ********
+
+        xax=xk2_rod
+        xbx=0.5d0
+
+        Diff_sph=1.d0/(6.d0*PI*xbx)
+        S_param=2.d0*dlog((xax+dsqrt(xax2-xbx2))/xbx)/dsqrt(xax2-xbx2)
+        L=2.d0*xax*2.d0*xbx
+        Eps=xbx/L
+
+        Fric_Per=4.d0*PI*L/(dlog(2.d0/Eps)-0.5d0+6.1d0/1000.d0)
+        Fric_Par=2.d0*PI*L/(dlog(2.d0/Eps)-1.5d0+6.1d0/1000.d0)
+        Fric_Rot=(0.333d0*pi*L**3)*1/(dlog(2.d0/Eps)-1.833d0+0.0017d0)
+        Diff_par_rod=1.d0/(Fric_Par)
+        Diff_per_rod=1.d0/(Fric_Per)
+        Diff_rot_rod=1.d0/(Fric_Rot)
+                 
+         print*, 'Diff_par_rod=',Diff_par_rod
+         print*, 'Diff_per_rod=',Diff_per_rod
+         print*, 'Diff_rot_rod=',Diff_rot_rod       
+         print*,  'temp=', TEMP
+
+        Diff_sph=TEMP*Diff_sph
+        Diff_par_rod=TEMP*Diff_par_rod
+        Diff_per_rod=TEMP*Diff_per_rod
+        Diff_rot_rod=TEMP*Diff_rot_rod
+       
+        print*, 'Diff_par_rod=',Diff_par_rod
+        print*, 'Diff_per_rod=',Diff_per_rod
+        print*, 'Diff_rot_rod=',Diff_rot_rod
+
+
+        write(49,*) 'S_param = ',S_param
+        write(49,*) 'Diff_sphere = ', Diff_sph
+        write(49,*) 'Diff_par_rod = ', Diff_par_rod
+        write(49,*) 'Diff_per_rod = ', Diff_per_rod
+        write(49,*) 'Diff_rot_rod = ', Diff_rot_rod
+
+!     ******** COMPUTE MAXIMUM DISPL AND ROTAT *******
+
+        displ_par_rod=2.d0*dsqrt(2.d0*Diff_par_rod*delta_time_rod)
+        displ_per_rod=2.d0*dsqrt(2.d0*Diff_per_rod*delta_time_rod)
+        displ_rot_rod=2.d0*dsqrt(2.d0*Diff_rot_rod*delta_time_rod)
+        displ_sph=2.d0*dsqrt(2.d0*Diff_sph*delta_time_sph)
+
+        print*, 'delta_time=',delta_time_rod
+        print*, 'displ_par=', displ_par_rod
+        print*, 'displ_per=', displ_per_rod
+        print*, 'displ_rot=', displ_rot_rod
+
+        write(49,*) 'displ_sph max = ', displ_sph
+        write(49,*) 'displ_par_rod max = ',displ_par_rod
+        write(49,*) 'displ_per_rod max = ',displ_per_rod
+        write(49,*) 'displ_rot_rod max = ',displ_rot_rod
+
+        DISPL_R=displ_par_rod
+        DISPL_S=displ_sph
+        DISPTH=displ_rot_rod
+
+      ELSE
+
+        displ_par_rod=DISPL_R
+        displ_per_rod=DISPL_R
+        displ_rot_rod=DISPTH
+        displ_sph=DISPL_S
+
+      END IF
+
+!     ************************************************
+!     ************************************************
+
+C     REINITIALISE RANDOM SEQUENCE
+
+      ISEED=-INT(RX(1)*123456789)-12345
+
+C     ZERO COUNTERS AND ACCUMULATION VARIABLES
+
+
+      NCOUNT=0
+      NCOUNT2=0
+
+      NCDISP=0
+      NCDISP2=0
+      NCDISP_rod=0
+      NCDISP_rod2=0
+      NCDISP_sph=0
+      NCDISP_sph2=0
+      NCTILT=0
+      NCTILT2=0
+      NACCPT=0
+      NACDISP=0
+      NACDISP2=0
+      NACDISP_rod=0
+      NACDISP_sph=0
+      NACDISP_rod2=0
+      NACDISP_sph2=0
+      NACTILT=0
+      NACTILT2=0
+      ENEAVSUB=0.d0      
+      FACCPT=0.D0
+      RTEST=0.0D00
+
+      call flush(38)
+      call flush(49)
+      call flush(304)
+      call flush(499)
+
+      orien_avg_dirnem=0.d0
+      orien_avg=0.d0
+      orien2_avg=0.d0
+      xyzmsd_avg_rod=0.d0
+      xymsd_avg_rod=0.d0
+      zmsd_avg_rod=0.d0
+      parmsd_avg_rod=0.d0
+      permsd_avg_rod=0.d0
+      xyzmsd_avg_sph=0.d0
+      
+      IF (LORDER) parnemmsd_avg_rod=0.d0
+      IF (LORDER) pernemmsd_avg_rod=0.d0
+      IF (LORDER) parnemmsd_avg_sph=0.d0
+      IF (LORDER) pernemmsd_avg_sph=0.d0
+ 
+      xdim=50.d0
+
+      DELR2=ZC2/XHISTG
+
+      n_istogr_parnem_rod=0
+      n_istogr_pernem_rod=0
+      n_istogr_parnem_sph=0
+      n_istogr_pernem_sph=0
+
+      istogr_parnem_max=0
+      istogr_pernem_max=0
+
+
+      istart=0 
+      icount=0
+
+
+ 888  istart=istart+1
+
+      xcm0(istart)=0.d0
+      ycm0(istart)=0.d0
+      zcm0(istart)=0.d0
+
+      DO I=1,N
+         xcm0(istart)=xcm0(istart)+rx(i)
+         ycm0(istart)=ycm0(istart)+ry(i)
+         zcm0(istart)=zcm0(istart)+rz(i)
+      END DO
+
+      xcm0(istart)=xcm0(istart)/XN
+      ycm0(istart)=ycm0(istart)/XN
+      zcm0(istart)=zcm0(istart)/XN
+
+
+      IF (LORDER) THEN
+
+       call order
+
+       DIXo(istart)=DIX
+       DIYo(istart)=DIY
+       DIZo(istart)=DIZ
+
+      END IF
+
+
+      do i=1,N
+        exo(i,istart)=ex(i)
+        eyo(i,istart)=ey(i)
+        ezo(i,istart)=ez(i)
+      enddo
+
+      do i=1,N
+        rxold(i,istart)=rx(i)
+        ryold(i,istart)=ry(i)
+        rzold(i,istart)=rz(i)
+      end do
+
+      do i=1,N
+        rdxa(i,istart)=0.d0
+        rdya(i,istart)=0.d0
+        rdza(i,istart)=0.d0
+      end do
+
+      do i=1,nrods
+        rdper1(I,istart)=0.d0
+        rdper2(I,istart)=0.d0
+        rdpar(I,istart)=0.d0
+      end do
+
+      DELTAxcm(istart)=0.d0
+      DELTAycm(istart)=0.d0
+      DELTAzcm(istart)=0.d0
+
+
+C     MONTE CARLO SEQUENCE
+C     CHOOSE A SPHEROCYLINDER AT RANDOM
+
+    1 I=INT(RAN2(ISEED)*XN)+1
+      NCOUNT=NCOUNT+1
+
+      TMOVE= RAN2(ISEED)
+
+      LDISP=.TRUE.
+      LTILT=.TRUE.
+
+      IF (i.gt.nrods) LTILT=.FALSE.      
+
+C     SAVE THE PRESENT POSITION AND ORIENTATION OF SPHEROCYLINDER 
+
+      RXI=RX(I)
+      RYI=RY(I)
+      RZI=RZ(I)
+      EXI=EX(I)
+      EYI=EY(I)
+      EZI=EZ(I)
+      xloverdi=xloverd(I)
+      STHETAI=STHETA(I)
+      
+      IF(LDISP) THEN
+         
+         NCDISP=NCDISP+1        ! One more displacement move
+         NCDISP2=NCDISP2+1        ! One more displacement move
+
+         if (i.le.nrods) then
+             ncdisp_rod=ncdisp_rod+1
+             ncdisp_rod2=ncdisp_rod2+1
+         end if
+
+         if (i.gt.nrods) then
+             ncdisp_sph=ncdisp_sph+1
+             ncdisp_sph2=ncdisp_sph2+1
+         end if
+
+         ! a random vector normal to E(I) is calculated
+
+937      em1=ran2(iseed)-0.5d0
+         em2=ran2(iseed)-0.5d0
+         em3=ran2(iseed)-0.5d0
+
+         xp=em1*exi+em2*eyi+em3*ezi
+
+          if (abs(xp).lt.1e-9) then
+             goto 937
+           end if
+
+         em1=em1-xp*exi
+         em2=em2-xp*eyi
+         em3=em3-xp*ezi
+
+         xp=dsqrt(em1*em1+em2*em2+em3*em3)
+
+         em1=em1/xp
+         em2=em2/xp
+         em3=em3/xp
+
+         wx=em2*ezi-em3*eyi
+         wy=em3*exi-em1*ezi
+         wz=em1*eyi-em2*exi
+         xp=dsqrt(wx*wx+wy*wy+wz*wz)
+         wx=wx/xp
+         wy=wy/xp
+         wz=wz/xp
+
+         if (i.le.nrods) then
+           dispar=displ_par_rod
+           disper=displ_per_rod
+           dpar=dispar*(ran2(iseed)-0.5d0)  
+           dper1=disper*(ran2(iseed)-0.5d0)
+           dper2=disper*(ran2(iseed)-0.5d0)
+           DX=dpar*exi+dper1*em1+dper2*wx
+           DY=dpar*eyi+dper1*em2+dper2*wy
+           DZ=dpar*ezi+dper1*em3+dper2*wz
+         else 
+           DX=displ_sph*(ran2(iseed)-0.5d0)
+           DY=displ_sph*(ran2(iseed)-0.5d0)
+           DZ=displ_sph*(ran2(iseed)-0.5d0)
+         end if
+
+         XNEW=RXI+DX            ! New coordinates of the center of mass of the HSC
+         YNEW=RYI+DY
+         ZNEW=RZI+DZ
+
+C     PERIODIC BOUNDARY CONDITIONS
+
+         IF (XNEW.LT.0.0D00) THEN
+            XNEW=XNEW+XC
+         ELSEIF (XNEW.GE.XC) THEN
+            XNEW=XNEW-XC
+         ENDIF
+
+         IF (YNEW.LT.0.0D00) THEN
+            YNEW=YNEW+YC
+         ELSEIF (YNEW.GE.YC) THEN
+            YNEW=YNEW-YC
+         ENDIF
+
+         IF (ZNEW.LT.0.0D00) THEN
+            ZNEW=ZNEW+ZC
+         ELSEIF (ZNEW.GE.ZC) THEN
+            ZNEW=ZNEW-ZC
+         ENDIF
+
+      ELSE
+
+         DX=0.D0                ! The HSC is not displaced
+         DY=0.D0
+         DZ=0.D0
+
+         XNEW=RXI
+         YNEW=RYI
+         ZNEW=RZI
+
+      ENDIF 
+
+C     Rotation of the molecule
+
+      IF(LTILT) THEN
+
+         NCTILT=NCTILT+1        ! One more rotation move
+         NCTILT2=NCTILT2+1      ! One more rotation move
+
+C     ROTATION OF THE MOLECULAR AXIS
+
+         STHETAI=DSQRT(1.D0-EZ(I)*EZ(I))
+
+         CALL ROTMOLAXIS2(EXI,EYI,EZI,STHETAI,EXNEW,EYNEW,EZNEW)
+         
+      ELSE
+         
+         EXNEW=EXI              ! Confirms the old orientation
+         EYNEW=EYI
+         EZNEW=EZI  
+         
+      ENDIF      
+
+*     THE CHANGE IN ENERGY IS COMPUTED EMPLOYING THE NEIGHBOUR LIST 
+
+      NPF=NPE(I)                ! NPE is the list of neighbors of the particle I
+      
+      EOLD=0.D0                 ! Initialize the old and new value of the energy
+      ENEW=0.D0  
+      
+      LPOSI=((I-1)*N)+1         ! Position of the neighbors of I into the "global list"
+
+      DO 2 M=LPOSI,LPOSI+NPF-1
+         
+         J=NLIST(M)             ! Particle, among N, whose number in the global list is M
+         
+         RXJ=RX(J)              ! Change the name of the positions of the center of mass of the HSCs
+         RYJ=RY(J)
+         RZJ=RZ(J)
+         EXJ=EX(J)              ! Change the name of the orientations of the center of mass of the HSCs   
+         EYJ=EY(J)
+         EZJ=EZ(J)
+         xloverdj=xloverd(J)
+
+         RXIJ=XNEW-RXJ          ! Distance between the new and old positions
+         RYIJ=YNEW-RYJ
+         RZIJ=ZNEW-RZJ
+
+         IF (RXIJ.LT.-XC2) THEN
+            RXIJ=RXIJ+XC
+         ELSEIF (RXIJ.GE.XC2) THEN
+            RXIJ=RXIJ-XC
+         ENDIF
+         IF (RYIJ.LT.-YC2) THEN
+            RYIJ=RYIJ+YC
+         ELSEIF (RYIJ.GE.YC2) THEN
+            RYIJ=RYIJ-YC
+         ENDIF
+         IF (RZIJ.LT.-ZC2) THEN
+            RZIJ=RZIJ+ZC
+         ELSEIF (RZIJ.GE.ZC2) THEN
+            RZIJ=RZIJ-ZC
+         ENDIF
+         
+         RIJSQ=RXIJ*RXIJ+RYIJ*RYIJ+RZIJ*RZIJ ! Squared distance
+
+         ! SQMOL is equal to RC, the cut-off radius for the neighbors list
+
+         SQMOL=(1.0D00+MAX(1.D0,XLOVERD_rod)+POTRANGE)**2.0D00 
+
+         IF (RIJSQ.GT.SQMOL) THEN 
+            DEIJ=0.D0           ! No change in energy for HSC outside the cut-off radius
+            GOTO 1999
+         ENDIF
+         
+*     Computation of Minimum Distance
+
+         IF (i.le.nrods .AND. j.le.nrods) then
+
+             CALL DMIN(RXIJ,RYIJ,RZIJ,EXNEW,EYNEW,EZNEW,
+     +                 EXJ,EYJ,EZJ,SIJSQ,
+     +                 RUI,RUJ,UIJ,RIJSQ)
+
+         ELSE IF (i.gt.nrods .AND. j.gt.nrods) then
+
+             SIJSQ=RIJSQ
+
+         ELSE
+
+             CALL DMIN2(RXIJ,RYIJ,RZIJ,EXNEW,EYNEW,EZNEW,
+     +                 EXJ,EYJ,EZJ,SIJSQ,
+     +                 RUI,RUJ,UIJ,RIJSQ,
+     +		       xloverdi,xloverdj)
+
+         END IF
+
+         CALL ENERGY(RIJSQ,SIJSQ,RUI,RUJ,UIJ,DEIJ,ICORE)
+
+         IF(ICORE.EQ.1) GOTO 3  ! There is an overlap. Move rejected! Go to line 3.
+
+ 1999    ENEW= ENEW + DEIJ      ! The energy is updated
+         
+
+!     ******************
+!     *Potential Type 3*
+!     ******************
+
+         if(nlrange.ne.3) then
+
+c     * computation of old energy. No for HSC system
+            
+            RXIJo=RXI-RXJ
+            RYIJo=RYI-RYJ
+            RZIJo=RZI-RZJ
+
+            IF (RXIJo.LT.-XC2) THEN
+               RXIJo=RXIJo+XC
+            ELSEIF (RXIJo.GE.XC2) THEN
+               RXIJo=RXIJo-XC
+            ENDIF
+            IF (RYIJo.LT.-YC2) THEN
+               RYIJo=RYIJo+YC
+            ELSEIF (RYIJo.GE.YC2) THEN
+               RYIJo=RYIJo-YC
+            ENDIF
+            IF (RZIJo.LT.-ZC2) THEN
+               RZIJo=RZIJo+ZC
+            ELSEIF (RZIJo.GE.ZC2) THEN
+               RZIJo=RZIJo-ZC
+            ENDIF
+C     
+            RIJSQo=RXIJo*RXIJo+RYIJo*RYIJo+RZIJo*RZIJo
+            SQMOL=(1.0D00+XLOVERD_rod+POTRANGE)**2.0D00
+
+            IF (RIJSQo.GT.SQMOL) THEN
+               DEIJo=0.D0
+               GOTO 2000
+            ENDIF
+
+C     Computation of Minimum Distance
+
+            IF (i.le.nrods .AND. j.le.nrods) then
+
+              CALL DMIN(RXIJo,RYIJo,RZIJo,EXI,EYI,EZI,
+     +                  EXJ,EYJ,EZJ,SIJSQo,
+     +           	RUI,RUJ,UIJ,RIJSQo)
+
+            ELSE IF (i.gt.nrods .AND. 
+     +               j.gt.nrods) then
+
+              SIJSQo=RIJSQo
+  
+            ELSE
+              
+              CALL DMIN2(RXIJo,RYIJo,RZIJo,EXI,EYI,EZI,
+     +			 EXJ,EYJ,EZJ,SIJSQo,
+     +           	 RUI,RUJ,UIJ,RIJSQo,
+     +		         xloverdi,xloverdj)
+
+            END IF
+
+
+            CALL ENERGY(RIJSQo,SIJSQo,RUI,RUJ,UIJ,DEIJo,ICORE)
+
+ 2000       EOLD=EOLD+deijo
+            
+         ENDIF
+         
+    2 CONTINUE
+    
+C     Calculando energía dipolar antes y después del movimiento
+C     Para la partícula I.
+
+      call ExtraEnergy(I,RX(I),RY(I),RZ(I),EX(I),EY(I),EZ(I),
+     &                       UD_OUT,URF_OUT,USW_OUT);
+      OLD_USW=USW_OUT;
+      call ExtraEnergy(I,XNEW,YNEW,ZNEW,EXNEW,EYNEW,EZNEW,
+     &                       UD_OUT,URF_OUT,USW_OUT);
+      ENEW_USW=USW_OUT;
+c     Aquí aportamos la contribución correspondiente a la energía dipolar      
+      EOLD=EOLD+OLD_USW;
+      ENEW=ENEW+ENEW_USW;
+
+
+C     CALCULATE CHANGE IN ENERGY
+
+      DELENG=ENEW-EOLD
+c      write(*,*) DELENG
+
+      IF (DELENG.LE.0.0D00) GOTO 1967
+      IF (DEXP(-DELENG/TEMP).LE.RAN2(ISEED)) GOTO 3
+
+ 1967 RX(I)=XNEW
+      RY(I)=YNEW
+      RZ(I)=ZNEW
+      EX(I)=EXNEW
+      EY(I)=EYNEW
+      EZ(I)=EZNEW
+      STHETA(I)=DSQRT(1.0D00-EZNEW*EZNEW)
+
+
+      ETOTAL=ETOTAL+DELENG    
+
+      do jj=1,istart
+        RDX(I,jj)=RDX(I,jj)+DX
+        RDY(I,jj)=RDY(I,jj)+DY
+        RDZ(I,jj)=RDZ(I,jj)+DZ
+
+        rdxa(I,jj)=rdxa(I,jj)+DX
+        rdya(I,jj)=rdya(I,jj)+DY
+        rdza(I,jj)=rdza(I,jj)+DZ
+
+        if (i.le.nrods) then
+          rdper1(I,jj)=rdper1(I,jj)+dper1
+          rdper2(I,jj)=rdper2(I,jj)+dper2
+          rdpar(I,jj)=rdpar(I,jj)+dpar
+        end if
+
+        RRMAXI=RDX(I,jj)*RDX(I,jj)+
+     +         RDY(I,jj)*RDY(I,jj)+
+     +         RDZ(I,jj)*RDZ(I,jj)
+      end do
+
+      NACCPT=NACCPT+1           	! Total accepted moves before and after the equilibration
+
+      IF(LDISP) then 			! Accepted displacements
+         NACDISP=NACDISP+1 
+         if (i.le.nrods) THEN
+             NACDISP_rod=NACDISP_rod+1
+             NACDISP_rod2=NACDISP_rod2+1
+         end if
+         if (i.gt.nrods) then
+             NACDISP_sph=NACDISP_sph+1
+             NACDISP_sph2=NACDISP_sph2+1
+         end if
+      END IF
+
+      IF(LTILT) THEN
+         NACTILT=NACTILT+1 	! Accepted rotations
+         NACTILT2=NACTILT2+1 	! Accepted rotations
+      END IF
+
+      ACC(2)=ACC(2)+1.0D00      	! Total moves accepted
+
+
+C     ACCUMULATE AVERAGES
+
+ 3    ACC(1)=ACC(1)+1.0D00      	! Total moves
+      ACC(13)=ACC(13)+ETOTAL    	! Total energy
+      ACC(14)=ACC(14)+ETOTAL*ETOTAL 	! (Total energy)**2
+
+      ENEAVSUB=ENEAVSUB+ETOTAL        
+
+
+C     ***********************************************
+C     *CHANGE THE VOLUME OF THE BOX EVERY NVOL MOVES*
+C     ***********************************************
+
+      IF (LVOL.AND.MOD(NCOUNT,NVOL).EQ.0) THEN ! If LVOL is true ==> NPT 
+
+         CALL VOLUME
+
+         ACC(7)=ACC(7)+1.0D00   ! Number of attempts to change the volume of the box
+
+         ENEAVSUB=ENEAVSUB+ETOTAL 
+
+         ACC(13)=ACC(13)+ETOTAL
+         ACC(14)=ACC(14)+ETOTAL*ETOTAL
+         ACC(11)=ACC(11)+VOLME
+         ACC(12)=ACC(12)+VOLME*VOLME
+         ACC(17)=ACC(17)+XN/VOLME ! Density updating
+         ACC(18)=ACC(18)+(XN/VOLME)*(XN/VOLME)
+         
+         IF (RHO.GT.RHOSTA.AND.RHO.LT.RHOEND) THEN 
+
+            LE=INT((RHO-RHOSTA)*XHISTE/(RHOEND-RHOSTA))+1 !RHOSTA=0.01 RHOEND=0.6 (*.inp file)
+            XNE(LE)=XNE(LE)+1.0D00 ! Counts the occurency of a given density
+
+         END IF
+
+      END IF
+
+
+! *********************************************************
+! ****SAVING THE DISPLACEMENT FROM ORIGINAL POSITION*******
+! *********************************************************
+
+      IF (MOD(NCOUNT,NSUB).EQ.0.d0) then
+ 
+        do jj=1,istart
+
+          NCOUNT2(jj)=NCOUNT2(jj)+1
+          XNCOUNT2=10.d0*DFLOAT(NCOUNT2(jj))
+	 
+          IXA1=int(log10(XNCOUNT2))
+          XA1=DFLOAT(IXA1)
+          XA2=10.0d0**XA1
+          XA3=(XNCOUNT2/XA2)
+          XA23=XA2*XA3
+          IXA23=XA23
+          IXA2=XA2
+          IXA3=XA3
+          IXAA23=IXA2*IXA3
+          IDELTAXA=IXA23-IXAA23
+
+          IF (IDELTAXA.eq.0) THEN
+ 
+            icount(jj)=icount(jj)+1
+
+            xcm=0.d0
+            ycm=0.d0
+            zcm=0.d0
+
+            do k=1,N
+   	      xcm=xcm+rxold(k,jj)+rdxa(k,jj)
+              ycm=ycm+ryold(k,jj)+rdya(k,jj)
+              zcm=zcm+rzold(k,jj)+rdza(k,jj)
+            end do
+
+            xcm=xcm/XN
+            ycm=ycm/XN
+            zcm=zcm/XN
+
+            DELTAxcm(jj)=xcm-xcm0(jj)
+            DELTAycm(jj)=ycm-ycm0(jj)
+            DELTAzcm(jj)=zcm-zcm0(jj)
+
+            if (jj.le.istart_max) then		! istart_max is the maximum number of starting points
+               ifile=1000*jj+icount(jj)		! used to save the displacements (for the int. scat. func.)
+            end if
+
+            DO k=1,N
+
+              DISX=RDXA(k,jj)-DELTAxcm(jj)
+              DISY=RDYA(k,jj)-DELTAycm(jj)
+              DISZ=RDZA(k,jj)-DELTAzcm(jj)
+
+              if (jj.le.istart_max) then
+                 write(ifile,6702) k,DISX,DISY,DISZ
+              end if
+
+            END DO
+
+            if (jj.le.istart_max) then
+              close (ifile)
+            end if
+
+
+            ! *********************************************
+            !       Mean Square displacement and NGP
+            ! *********************************************
+
+            suma_xyz_rod=0.d0
+            suma_xy_rod=0.d0
+            suma_z_rod=0.d0
+
+            suma_xyz_sph=0.d0
+
+            sumo_nem=0.d0
+            sumo=0.d0
+            sumo2=0.d0
+
+            suma_par_rod=0.d0
+            suma_per_rod=0.d0
+
+            IF (LORDER) THEN
+              suma_parnem_rod=0.d0
+ 	      suma_pernem_rod=0.d0
+              suma_parnem_sph=0.d0
+ 	      suma_pernem_sph=0.d0
+
+              call order
+
+              coste_nem=DIXo(jj)*DIX+DIYo(jj)*DIY+DIZo(jj)*DIZ
+              sumo_nem=sumo_nem+coste_nem
+
+            END IF
+
+            DO k=1,N
+
+             RRMAXI=RDXA(k,jj)*RDXA(k,jj)+
+     +              RDYA(k,jj)*RDYA(k,jj)+
+     +              RDZA(k,jj)*RDZA(k,jj)
+
+             DISX=RDXA(k,jj)-DELTAxcm(jj)
+             DISY=RDYA(k,jj)-DELTAycm(jj)
+             DISZ=RDZA(k,jj)-DELTAzcm(jj)
+             
+             if (k.le.nrods) then
+
+               DIS_per1=rdper1(k,jj)
+               DIS_per2=rdper2(k,jj)
+               DIS_par=rdpar(k,jj)
+
+               SUMA_xyz_rod=SUMA_xyz_rod+DISX*DISX+
+     +                                   DISY*DISY+
+     +                                   DISZ*DISZ
+               SUMA_xy_rod=SUMA_xy_rod+DISX*DISX+
+     +                                 DISY*DISY
+               SUMA_z_rod=SUMA_z_rod+DISZ*DISZ
+
+               suma_par_rod=suma_par_rod+DIS_par*DIS_par
+               suma_per_rod=suma_per_rod+DIS_per1*DIS_per1+
+     +                                   DIS_per2*DIS_per2
+
+             else
+
+               SUMA_xyz_sph=SUMA_xyz_sph+DISX*DISX+
+     +                                   DISY*DISY+
+     +                                   DISZ*DISZ
+
+             end if
+
+
+             IF (LORDER) THEN
+
+               disparnem=DISX*DIX+DISY*DIY+DISZ*DIZ
+
+               dispernem2=(DISX*DISX+DISY*DISY+DISZ*DISZ-
+     +                    disparnem**2)
+
+               ! ****** VAN HOVE FUNCTIONS ********	
+
+               sqr_parnem=dabs(disparnem)
+               sqr_pernem=DSQRT(dispernem2)
+
+               istogr_parnem=int(xdim*sqr_parnem)
+               istogr_pernem=int(xdim*sqr_pernem)
+
+               if (k.le.nrods) then
+
+                 n_istogr_parnem_rod(icount(jj),istogr_parnem)=
+     +           n_istogr_parnem_rod(icount(jj),istogr_parnem)+1
+
+                 n_istogr_pernem_rod(icount(jj),istogr_pernem)=
+     +           n_istogr_pernem_rod(icount(jj),istogr_pernem)+1
+
+               else
+
+                 n_istogr_parnem_sph(icount(jj),istogr_parnem)=
+     +           n_istogr_parnem_sph(icount(jj),istogr_parnem)+1
+
+                 n_istogr_pernem_sph(icount(jj),istogr_pernem)=
+     +           n_istogr_pernem_sph(icount(jj),istogr_pernem)+1
+
+               end if
+
+               if (istogr_parnem.gt.istogr_parnem_max(icount(jj))) then
+                   istogr_parnem_max(icount(jj))=istogr_parnem
+               end if
+
+               if (istogr_pernem.gt.istogr_pernem_max(icount(jj))) then
+                 istogr_pernem_max(icount(jj))=istogr_pernem
+               end if
+
+               ! *******************************
+
+               if (k.le.nrods) then
+
+                 suma_parnem_rod=suma_parnem_rod+
+     +                           disparnem*disparnem
+                 suma_pernem_rod=suma_pernem_rod+
+     +                           dispernem2
+
+               else
+
+                 suma_parnem_sph=suma_parnem_sph+
+     +                           disparnem*disparnem
+                 suma_pernem_sph=suma_pernem_sph+
+     +                           dispernem2
+
+               end if
+
+             END IF
+
+
+             if (k.le.nrods) then
+               coste=exo(k,jj)*ex(k)+eyo(k,jj)*ey(k)+ezo(k,jj)*ez(k)
+               sumo=sumo+coste
+               sumo2=sumo2+0.5d0*(3.d0*coste*coste-1.d0)
+             end if 
+
+            END DO             	  
+
+	! *********************************************************
+
+           xyzmsd_avg_rod(icount(jj))=xyzmsd_avg_rod(icount(jj))+
+     +                            SUMA_xyz_rod/dfloat(nrods)
+
+           xymsd_avg_rod(icount(jj))=xymsd_avg_rod(icount(jj))+
+     +                            SUMA_xy_rod/dfloat(nrods)
+
+           zmsd_avg_rod(icount(jj))=zmsd_avg_rod(icount(jj))+
+     +                           SUMA_z_rod/dfloat(nrods)
+
+           parmsd_avg_rod(icount(jj))=parmsd_avg_rod(icount(jj))+
+     +                             SUMA_par_rod/dfloat(nrods)
+
+           permsd_avg_rod(icount(jj))=permsd_avg_rod(icount(jj))+
+     +                             SUMA_per_rod/dfloat(nrods)
+
+	! *********************************************************
+
+           xyzmsd_avg_sph(icount(jj))=xyzmsd_avg_sph(icount(jj))+
+     +                            SUMA_xyz_sph/dfloat(nsph)
+
+	! *********************************************************
+
+            IF (LORDER) THEN
+
+              parnemmsd_avg_rod(icount(jj))=
+     +        parnemmsd_avg_rod(icount(jj))+
+     +        suma_parnem_rod/dfloat(nrods)
+
+              pernemmsd_avg_rod(icount(jj))=
+     +        pernemmsd_avg_rod(icount(jj))+
+     +        suma_pernem_rod/dfloat(nrods)
+
+              parnemmsd_avg_sph(icount(jj))=
+     +        parnemmsd_avg_sph(icount(jj))+
+     +        suma_parnem_sph/dfloat(nsph)
+
+              pernemmsd_avg_sph(icount(jj))=
+     +        pernemmsd_avg_sph(icount(jj))+
+     +        suma_pernem_sph/dfloat(nsph)
+
+            END IF
+
+
+            orien_avg_dirnem(icount(jj))=
+     +      orien_avg_dirnem(icount(jj))+sumo_nem
+
+            orien_avg(icount(jj))=orien_avg(icount(jj))+
+     +                            sumo/dfloat(nrods)
+
+            orien2_avg(icount(jj))=orien2_avg(icount(jj))+
+     +                            sumo2/dfloat(nrods)
+
+          END IF
+
+        END DO
+
+      END IF 
+
+ 6702 FORMAT(1X,I8,4(6x,F24.16))
+
+
+
+! ************************************************************
+! ************************************************************
+! ************************************************************
+
+C     DETERMINE DIRECTOR AND ORDER PARAMETER EVERY NSUB MOVES
+
+!      IF (LORDER.AND.MOD(NCOUNT,NSUB).EQ.0) THEN   
+
+!         CALL ORDER
+      
+!         ACC(4)=ACC(4)+1.0D00
+!         ACC(5)=ACC(5)+P2
+!         ACC(6)=ACC(6)+P2*P2
+
+!      END IF
+
+*************************************************************
+*     
+C     CALCULATE RADIAL PAIR DISTRIBUTION FUNCTIONS EVERY NGOFR MOVES
+C     (ONCE EQUILIBRIUM IS REACHED)
+
+!      IF(LGOFR.AND.NCOUNT.GT.NEQUIL) THEN
+      
+!         IF(MOD(NCOUNT,NGOFR).EQ.0) THEN
+         
+!            IF (MOD(NCOUNT,NSUB).NE.0) THEN
+            
+!               CALL ORDER
+!               ACC(44)=ACC(44)+1.0D00
+!               ACC(5)=ACC(5)+P2
+!               ACC(6)=ACC(6)+P2*P2
+            
+!            ENDIF
+            
+!            CALL GOFR
+            
+!            ACC(3)=ACC(3)+1.0D00
+         
+!         END IF
+!      ENDIF
+      
+C     UPDATE NEIGHBOUR LIST
+      
+      IF (RRMAXI.GE.RRTEST) CALL SLIST(istart)
+ 	
+      IF (MOD(NCOUNT,NSUB).EQ.0) THEN
+
+C     PRINT OUT
+C     INSTANTANEOUS VALUES
+C     AVERAGE VALUES
+
+         VACCPT=0.0D00
+         RHOAV=XN/(XC*YC*ZC)
+         FACCPT=0.0D00
+
+         IF(ACC(7).NE.0) THEN
+            VACCPT=ACC(8)/ACC(7)
+            RHOAV=ACC(17)/ACC(7)
+         END IF
+
+         P2AV=0.0D00
+
+         IF (LORDER) THEN
+            P2AV=ACC(5)/(ACC(4)+ACC(44))
+         ENDIF
+
+         XACCPT=ACC(2)/ACC(1) 
+         XACDISP=DFLOAT(NACDISP)/DFLOAT(NCDISP)
+         XACDISP2=DFLOAT(NACDISP2)/DFLOAT(NCDISP2)
+         XACDISP_rod=DFLOAT(NACDISP_rod)/DFLOAT(NCDISP_rod)
+         XACDISP_rod2=DFLOAT(NACDISP_rod2)/DFLOAT(NCDISP_rod2)
+         XACDISP_sph=DFLOAT(NACDISP_sph)/DFLOAT(NCDISP_sph)
+         XACDISP_sph2=DFLOAT(NACDISP_sph2)/DFLOAT(NCDISP_sph2)
+         XACTILT=DFLOAT(NACTILT)/DFLOAT(NCTILT)
+         XACTILT2=DFLOAT(NACTILT2)/DFLOAT(NCTILT2)
+         XVACC=ACC(8)/ACC(7)
+
+         ENGAVE=ACC(13)/(ACC(1)+ACC(7)+ACC(15))/XN
+
+         ENEAVSUB=ENEAVSUB/(DFLOAT(NSUB+NCFLIP)+ACC(7))
+
+         IF(LVOL) THEN 
+            WRITE(49,104) NINT(ACC(1)/XN),XACDISP,XACDISP_ROD,XACDISP_SPH,
+     +                                    XACTILT,XACCPT,XVACC,
+     +           			  RHOAV,P2AV,ENEAVSUB/XN
+            WRITE(304,104) NINT(ACC(1)/XN),XACDISP2,XACDISP_ROD2,XACDISP_SPH2,
+     +                                    XACTILT2
+         ELSE
+
+            WRITE(49,91) NINT(ACC(1)/XN),ENEAVSUB/XN
+
+            WRITE(499,*) NINT(ACC(1)/XN),XACDISP_ROD,
+     +			     XACDISP_SPH,XACTILT
+            WRITE(304,*) NINT(ACC(1)/XN),XACDISP_ROD2,
+     +			     XACDISP_SPH2,XACTILT2
+
+         ENDIF    
+
+*     Interacting correction of deltas
+
+         IF (LCORRECT) THEN
+            IF(XACDISP.GT.0.5.AND.DISPL.LT.0.5) THEN
+               DISPL=DISPL*1.05 
+            ELSE
+               IF(XACDISP.LT.0.3) DISPL=DISPL*0.95 
+            ENDIF
+            IF(DISPL.gt.0.5) displ=0.5
+            IF(XACTILT.GT.0.5.AND.DISPTH.LT.0.2) THEN
+               DISPTH=DISPTH*1.05 
+            ELSE
+               IF(XACTILT.LT.0.3) DISPTH=DISPTH*0.95 
+            ENDIF
+            IF(LVOL) THEN
+               IF(XVACC.GT.0.3) THEN
+                  DISPLS=DISPLS*1.05
+               ELSE
+                  IF(XVACC.LT.0.2) DISPLS=DISPLS*0.95
+               ENDIF
+            ENDIF
+         ENDIF
+
+*     reseting counters for acceptance rate
+
+         NCDISP_rod2=0
+         NCDISP_sph2=0
+         NACDISP_rod2=0
+         NACDISP_sph2=0
+         NACTILT2=0
+         NCTILT2=0
+         NACDISP2=0
+         NCDISP2=0
+
+!         NCDISP_rod=0
+!         NCDISP_sph=0
+!         NACDISP_rod=0
+!         NACDISP_sph=0
+!         NACTILT=0
+!         NCTILT=0
+!         NACCPT=0
+!         NACDISP=0
+!         NCDISP=0
+!         ENEAVSUB=0
+
+         CALL FINISH(IFIN)
+
+         call flush(38)
+         call flush(49)
+         call flush(304)
+         call flush(499)
+
+      ENDIF
+
+
+      IF (istart.GE.NMOVE1) GOTO 4
+
+      IF (NCOUNT.GE.NMOVE) THEN
+
+!        print*, istart,nmove1
+
+        NCOUNT=0
+
+	! *********WRITING**************
+
+        open(unit=86,file='msd.dat',STATUS='unknown')		! MSD with respect to the box axys
+        open(unit=866,file='msd2.dat',STATUS='unknown')		! MSD with respect to the particle's axys
+        open(unit=877,file='msd3.dat',STATUS='unknown')		! MSD with respect to the nematic director
+        open(unit=88,file='orien.dat',STATUS='unknown')		! Orientation autocorrelation functions
+        open(unit=89,file='ncount.dat',STATUS='unknown')	! Number of cycles (logarithmic scale)
+
+
+        ! ************************
+        ! ******Van Hove**********
+        ! ************************
+
+
+        ncount2_max=0
+        navg1=0
+
+        do jj=1,istart
+          icount2=0
+          do i=1,ncount2(jj)
+
+            if (ncount2(jj).gt.ncount2_max) then                        ! Maximum number of cycles sampled
+              ncount2_max=ncount2(jj)
+            end if
+
+            XNCOUNT2=10.d0*DFLOAT(i)
+            IXA1=int(log10(XNCOUNT2))
+            XA1=DFLOAT(IXA1)
+            XA2=10.0d0**XA1
+            XA3=(XNCOUNT2/XA2)
+            XA23=XA2*XA3
+            IXA23=XA23
+            IXA2=XA2
+            IXA3=XA3
+            IXAA23=IXA2*IXA3
+            IDELTAXA=IXA23-IXAA23
+
+            IF (IDELTAXA.eq.0) THEN
+              icount2=icount2+1
+              navg1(icount2)=navg1(icount2)+1
+
+              imaxtot(icount2)=max(istogr_parnem_max(icount2),
+     +                             istogr_pernem_max(icount2))
+
+              do k=0,imaxtot(icount2)
+                parnem_istogr_avg_rod(icount2,k)=
+     +                (n_istogr_parnem_rod(icount2,k))/XN_rods
+
+                pernem_istogr_avg_rod(icount2,k)=
+     +                (n_istogr_pernem_rod(icount2,k))/XN_rods
+
+                parnem_istogr_avg_sph(icount2,k)=
+     +                (n_istogr_parnem_sph(icount2,k))/XN_sph
+
+                pernem_istogr_avg_sph(icount2,k)=
+     +                (n_istogr_pernem_sph(icount2,k))/XN_sph
+
+             end do
+
+            END IF
+          end do
+        end do
+
+        ii=0
+        ifile2=400
+
+        do i=1,ncount2_max
+          XNCOUNT2=10.d0*DFLOAT(i)
+          IXA1=int(log10(XNCOUNT2))
+          XA1=DFLOAT(IXA1)
+          XA2=10.0d0**XA1
+          XA3=(XNCOUNT2/XA2)
+          XA23=XA2*XA3
+          IXA23=XA23
+          IXA2=XA2
+          IXA3=XA3
+          IXAA23=IXA2*IXA3
+          IDELTAXA=IXA23-IXAA23
+
+          IF (IDELTAXA.eq.0) THEN
+            ii=ii+1
+
+            ifile2=ifile2+1
+
+            do k=0,imaxtot(ii)
+              parnem_istogr_avg_rod(ii,k)=parnem_istogr_avg_rod(ii,k)/
+     +                              DFLOAT(navg1(ii))
+              pernem_istogr_avg_rod(ii,k)=pernem_istogr_avg_rod(ii,k)/
+     +                              DFLOAT(navg1(ii))
+
+              parnem_istogr_avg_sph(ii,k)=parnem_istogr_avg_sph(ii,k)/
+     +                              DFLOAT(navg1(ii))
+              pernem_istogr_avg_sph(ii,k)=pernem_istogr_avg_sph(ii,k)/
+     +                              DFLOAT(navg1(ii))
+
+              write (ifile2,7701) DFLOAT(k)/xdim,                         ! Writing the Van Hove functions
+     +                        parnem_istogr_avg_rod(ii,k),
+     +                        pernem_istogr_avg_rod(ii,k),
+     +                        parnem_istogr_avg_sph(ii,k),
+     +                        pernem_istogr_avg_sph(ii,k)
+            end do
+
+            close (ifile2)
+
+          END IF
+        end do
+
+        ! ************************
+        ! ******MSD and NGP*******
+        ! ************************
+
+        ncount2_max=0
+        navg2=0
+
+        do jj=1,istart
+          icount2=0
+	  do i=1,ncount2(jj)
+
+            if (ncount2(jj).gt.ncount2_max) then			! Maximum number of cycles sampled
+ 	      ncount2_max=ncount2(jj)
+            end if
+
+            XNCOUNT2=10.d0*DFLOAT(i)
+            IXA1=int(log10(XNCOUNT2))
+            XA1=DFLOAT(IXA1)
+            XA2=10.0d0**XA1
+            XA3=(XNCOUNT2/XA2)
+            XA23=XA2*XA3
+            IXA23=XA23
+            IXA2=XA2
+            IXA3=XA3
+            IXAA23=IXA2*IXA3
+            IDELTAXA=IXA23-IXAA23
+            IF (IDELTAXA.eq.0) THEN
+              icount2=icount2+1
+  	      navg2(icount2)=navg2(icount2)+1
+             END IF
+          end do
+        end do
+
+        ii=0
+
+        do i=1,ncount2_max
+          XNCOUNT2=10.d0*DFLOAT(i)
+          IXA1=int(log10(XNCOUNT2))
+          XA1=DFLOAT(IXA1)
+          XA2=10.0d0**XA1
+          XA3=(XNCOUNT2/XA2)
+          XA23=XA2*XA3
+          IXA23=XA23
+          IXA2=XA2
+          IXA3=XA3
+          IXAA23=IXA2*IXA3
+          IDELTAXA=IXA23-IXAA23
+
+          IF (IDELTAXA.eq.0) THEN
+            ii=ii+1
+
+            ! ****************************************************
+
+            xyzmsd_avg_rod_new=xyzmsd_avg_rod(ii)/
+     +                         DFLOAT(navg2(ii))
+
+            xymsd_avg_rod_new=xymsd_avg_rod(ii)/
+     +                        DFLOAT(navg2(ii))
+            zmsd_avg_rod_new=zmsd_avg_rod(ii)/
+     +                       DFLOAT(navg2(ii))
+
+            parmsd_avg_rod_new=parmsd_avg_rod(ii)/
+     +                         DFLOAT(navg2(ii))
+            permsd_avg_rod_new=permsd_avg_rod(ii)/
+     +                         DFLOAT(navg2(ii))
+
+            ! ****************************************************
+
+            xyzmsd_avg_sph_new=xyzmsd_avg_sph(ii)/
+     +                         DFLOAT(navg2(ii))
+
+            ! ****************************************************
+
+            IF (LORDER) THEN
+              parnemmsd_avg_rod_new=parnemmsd_avg_rod(ii)/
+     +                              DFLOAT(navg2(ii))
+              pernemmsd_avg_rod_new=pernemmsd_avg_rod(ii)/
+     +                              DFLOAT(navg2(ii))
+            END IF
+
+            IF (LORDER) THEN
+              parnemmsd_avg_sph_new=parnemmsd_avg_sph(ii)/
+     +                              DFLOAT(navg2(ii))
+              pernemmsd_avg_sph_new=pernemmsd_avg_sph(ii)/
+     +                              DFLOAT(navg2(ii))
+            END IF
+
+            ! ****************************************************
+
+            orien_avg_new_dirnem=orien_avg_dirnem(ii)/DFLOAT(navg2(ii))
+            orien_avg_new=orien_avg(ii)/DFLOAT(navg2(ii))
+            orien2_avg_new=orien2_avg(ii)/DFLOAT(navg2(ii))
+
+            write(86,6700) i,xymsd_avg_rod_new,
+     +                       zmsd_avg_rod_new,
+     + 			     xyzmsd_avg_rod_new,
+     +			     xyzmsd_avg_sph_new
+
+            write(866,6701) i,permsd_avg_rod_new,
+     +                        parmsd_avg_rod_new
+
+            write(877,6701) i,pernemmsd_avg_rod_new,
+     +			      parnemmsd_avg_rod_new,
+     +                        pernemmsd_avg_sph_new,
+     +                        parnemmsd_avg_sph_new
+
+
+            write(88,6701) i,orien_avg_new,orien2_avg_new,
+     +                       orien_avg_new_dirnem
+
+            write(89,*) i				! Writing the times sampled in ncount.dat
+
+          END IF
+        end do
+
+        close (86)
+        close (866)
+        close (877)
+        close (88)
+        close (89)
+
+        ! ************************
+        ! ************************
+        ! ************************
+
+        GOTO 888 
+
+      END IF
+
+      GOTO 1
+
+C     END OF RUN
+
+      ! ********************************************************************************
+      ! ********************************************************************************
+      ! ********************************************************************************
+      ! ********************************************************************************
+
+
+ 4    VACCPT=0.0D00
+      RHOAV=XN/(XC*YC*ZC)
+      FACCPT=0.0D00
+
+      IF(ACC(7).NE.0) THEN
+         VACCPT=ACC(8)/ACC(7)   ! Percentage of accepted volume moves
+         RHOAV=ACC(17)/ACC(7)   ! Density changes per volume move
+      END IF
+
+      P2AV=0.0D00
+
+      IF(LORDER) THEN
+         P2AV=ACC(5)/(ACC(4)+ACC(44))
+      ENDIF
+      
+      WRITE(49,102) ACC(1),ACC(3),ACC(4),ACC(7)
+
+C     AVERAGING ENERGY
+
+      ENGAVE=ACC(13)/(ACC(1)+ACC(7)+ACC(15))/XN
+      ENGAVS=ACC(14)/(ACC(1)+ACC(7)+ACC(15))/XN/XN
+      VARENG=ENGAVS-ENGAVE*ENGAVE
+      SIGENG=DSQRT(DABS(VARENG))
+
+      WRITE(49,*) ' ENERGY=',ENGAVE,'+/-',SIGENG
+      WRITE(49,*) ' Cv/k=',VARENG/TEMP**2.0D00
+
+C     AVERAGING ORDER PARAMETER
+
+      IF (LORDER) THEN
+         P2AVRUN=ACC(5)/(ACC(4)+ACC(44))
+         P2SQRUN=ACC(6)/(ACC(4)+ACC(44))
+         VARIP2=P2SQRUN-P2AVRUN*P2AVRUN
+         ERRORP2=DSQRT(DABS(VARIP2/ACC(4)))
+
+         WRITE(49,103)P2AVRUN,DSQRT(DABS(VARIP2)),ERRORP2
+
+*     hexatic bond
+
+         IF(LBOND) THEN  
+            BOND6AV= ACC(30)/ACC(4)
+            BOND6SQ= ACC(31)/ACC(4)
+            ERRBOND6= DSQRT(DABS(BOND6SQ - BOND6AV*BOND6AV))
+            BOND4AV= ACC(32)/ACC(4)
+            BOND4SQ= ACC(33)/ACC(4)
+            ERRBOND4= DSQRT(DABS(BOND4SQ - BOND4AV*BOND4AV))
+
+            WRITE(49,108)BOND6AV,ERRBOND6
+            WRITE(49,109)BOND4AV,ERRBOND4
+
+         ENDIF
+      END IF
+
+C     AVERAGING VOLUME
+
+      IF (LVOL) THEN 
+
+         VAV=ACC(11)/ACC(7)
+         VAV2=ACC(12)/ACC(7)
+         VARI=VAV2-VAV*VAV
+         EAV=ACC(17)/ACC(7)
+         EAV2=ACC(18)/ACC(7)
+         VARIE=EAV2-EAV*EAV
+
+         SIGMAV=DSQRT(DABS(VARI))
+         SIGMAE=DSQRT(DABS(VARIE))
+         SIGMAE2=DSQRT(DABS(VARIE2))
+         ERRORV=DSQRT(DABS(VARI)/ACC(7))
+         ERRORE=DSQRT(DABS(VARIE)/ACC(7))
+         PVNKTE=PRESS/EAV
+         ERRORPE=DABS(PRESS*(1.0D00/(EAV+SIGMAE)
+     +        -1.0D00/(EAV-SIGMAE))/2.0D00)
+
+C     AVERAGE PACKING FRACTION ETA
+
+         WRITE(49,*) ' ETA=    ',EAV*vm,'+/-',SIGMAE*vm
+         write(49,*) 'rho=    ',EAV,'+/-',SIGMAE
+         WRITE(49,*) ' PVNKT(E)=',PVNKTE,'+/-',ERRORPE
+      
+      END IF
+
+ 1007 format(I10,1x,15(G15.5,1x))
+ 101  FORMAT(1X,'MOVE=',I10,' NAC=',F7.3,' VAC=',F7.3,
+     +     ' FAC=',F7.3,' RHO=',F7.3,' P2=',F6.3,' E=',F7.3/)
+ 104  FORMAT(1X,'MOVE=',I10,' NACD=',F7.3,' NACD_ROD=',F7.3,
+     +     ' NACD_SPH=',F7.3,' NACT=',F7.3,' NACTOT=',F7.3,
+     +     ' VAC=',F7.3,' RHO=',F7.3,' P2=',F7.3,
+     +     ' E=',1PE13.4/)
+ 105  FORMAT(1X,'MOVE=',I10,' NACD=',F7.3,' NACD_R=',F7.3,
+     +     ' NACD_S=',F7.3,' NACT=',F7.3,' NACTOT=',F7.3/)
+
+  91  FORMAT(1X,'MOVE=',I10,' E=',1PE18.4/)
+
+ 102  FORMAT(1X,'TOTAL NUMBER OF CONFIGURATIONS SINCE START',F12.0,/
+     +     ,' NUMBER OF TIMES G(R) IS CALLED',F12.0,/
+     +     ,' NUMBER OF TIMES ORDER IS CALLED',F12.0,/
+     +     ,' NUMBER OF TIMES VOLUME IS CALLED',F12.0,/)
+ 103  FORMAT(1X,'RUNNING AVERAGE OF ORDER PARAMETER P2=',F12.8,/
+     +     1X,'VARIP2=',F12.8,' ERRORP2=',F12.8,/)
+ 108  FORMAT(1X,'RUNNING AVERAGE HEXATIC BOND BOND6=',1PE13.4,/
+     +     1X,' ERRORP2=',1PE13.4,/)
+ 109  FORMAT(1X,'RUNNING AVERAGE SQUARE BOND BOND4=',1PE13.4,/
+     +     1X,' ERRORP2=',1PE13.4,/)
+      
+ 6700 FORMAT(1X,I10,4(9x,F24.16))
+ 6701 FORMAT(1X,I10,4(9x,F24.16))
+ 7701 FORMAT(1X,5(9x,F24.16))
+
+      RETURN
+
+      END
+      
+
+! *****************************************************************************
+! *****************************************************************************
+
+      SUBROUTINE VOLUME
+
+      INCLUDE 'mcnptv06.inc'
+
+!     X is modified randomly
+
+      DXC=DISPLS*(ran2(iseed)-0.5d0) ! DISPLS=0.01 (See *.inp file)
+
+      if(LBOX) then 
+
+!     The other two sides are modified independetly of X, that is randomly
+
+         DYC=DISPLS*(ran2(iseed)-0.5d0)
+         DZC=DISPLS*(ran2(iseed)-0.5d0)
+
+      else
+
+!     Y and Z sides are modified as much as X 
+
+         DYC=DXC
+         DZC=DXC
+
+      endif
+
+
+      XCO=XC                    ! The old values of the box are saved
+      YCO=YC
+      ZCO=ZC
+      
+      GXCN=log(XC)+DXC          ! Logarithms of the changes in the 3 directions
+      GYCN=log(YC)+DYC
+      GZCN=log(ZC)+DZC
+
+      xcn=dexp(gxcn)            ! Changes in the 3 directions
+      ycn=dexp(gycn)
+      zcn=dexp(gzcn)
+      
+      if(xcn.lt.SIGLI) xcn=xco  ! SIGLI defined in Line 217
+      if(ycn.lt.SIGLI) ycn=yco
+      if(zcn.lt.SIGLI) zcn=zco
+
+      volmeol=xc*yc*zc          ! Old volume
+      volmene=xcn*ycn*zcn       ! New volume
+      
+      xcn2=xcn*0.5d0            ! Half sizes of the box
+      ycn2=ycn*0.5d0
+      zcn2=zcn*0.5d0
+
+
+
+*     FOR THE HSC FLUID, IF THE BOX GROWS THERE ARE NO OVERLAPS FOR SURE
+*     Suddenly, I am not sure about that
+!     IF(NLRANGE.EQ.3) THEN
+!     IF(XCN.LT.XC) GOTO 8
+!     IF(YCN.LT.YC) GOTO 8
+!     IF(ZCN.LT.ZC) GOTO 8
+!     DELU=0.D0
+!     GOTO 7 
+!     ENDIF
+      
+    8 ENEW=0.D0
+
+
+      LPOSI=1
+
+      DO 1 I=1,N-1
+
+C     SAVE POSITION OF I FOR FASTER LOOP ACCESS
+
+!     Rescale the center of mass. Frenkel and Smit pp 122
+
+         RXI=RX(I)*XCN/XCO 
+         RYI=RY(I)*YCN/YCO 
+         RZI=RZ(I)*ZCN/ZCO 
+
+         EXI=EX(I)      ! Orientations stay constant
+         EYI=EY(I)
+         EZI=EZ(I)
+
+         xloverdi=xloverd(I)
+
+         NPF=NPE(I)     ! Number of neighbors for I is called.
+
+         IF (NPF.EQ.0) GOTO 5
+
+         DO 2 M=LPOSI,LPOSI+NPF-1
+
+            J=NLIST(M)
+
+            IF (J.LE.I) GOTO 2
+
+C     SAVE POSITION OF J FOR FASTER LOOP ACCESS
+
+            RXJ=RX(J)*XCN/XCO 
+            RYJ=RY(J)*YCN/YCO
+            RZJ=RZ(J)*ZCN/ZCO
+
+            EXJ=EX(J)
+            EYJ=EY(J)
+            EZJ=EZ(J)
+
+            xloverdj=xloverd(j)
+
+            RXIJ=RXI-RXJ     ! Recalculate the distances between the particles I and J
+            RYIJ=RYI-RYJ
+            RZIJ=RZI-RZJ
+
+C     MINIMUM IMAGE CONVENTION
+C     IDENTICAL TO THE M.I.C. IN THE OVERLAP SUBROUTINE
+
+            IF (RXIJ.LT.-XCN2) THEN
+               RXIJ=RXIJ+XCN
+            ELSEIF (RXIJ.GE.XCN2) THEN
+               RXIJ=RXIJ-XCN
+            ENDIF
+            IF (RYIJ.LT.-YCN2) THEN
+               RYIJ=RYIJ+YCN
+            ELSEIF (RYIJ.GE.YCN2) THEN
+               RYIJ=RYIJ-YCN
+            ENDIF
+            IF (RZIJ.LT.-ZCN2) THEN
+               RZIJ=RZIJ+ZCN
+            ELSEIF (RZIJ.GE.ZCN2) THEN
+               RZIJ=RZIJ-ZCN
+            ENDIF
+
+C     THE NEXT THREE LINES ALLOW THE PROGRAM TO JUMP OUT IF TWO PARTICLES ARE MORE 
+C     THAN THEIR END TO END DISTANCE, PLUS RANGE OF POTENTIAL APART
+C     IF THIS IS SO, THERE IS NO PAIR INTERACTION
+
+            RIJSQ=RXIJ*RXIJ+RYIJ*RYIJ+RZIJ*RZIJ
+
+            SQMOL=(1.0D00+MAX(1.D0,XLOVERD_rod)+POTRANGE)**2.0D00
+
+            IF (RIJSQ.GT.SQMOL) THEN  ! Out of the cut-off radius
+               DEIJ=0.D0
+               GOTO 22
+            ENDIF 
+
+C     CONTINUING WITH THE ENERGY COMPUTATION FOR ACCEPTANCE TEST
+*     Computation of Minimum Distance
+
+            IF (i.le.nrods .AND. 
+     +          j.le.nrods) then
+ 
+               CALL DMIN(RXIJ,RYIJ,RZIJ,EXI,EYI,EZI,
+     +			EXJ,EYJ,EZJ,SIJSQ,
+     +           	RUI,RUJ,UIJ,RIJSQ)
+
+            ELSE IF (i.gt.nrods .AND.
+     +               j.gt.nrods) then
+		
+               SIJSQ=RIJSQ
+
+            ELSE
+
+               CALL DMIN2(RXIJ,RYIJ,RZIJ,EXI,EYI,EZI,
+     +			EXJ,EYJ,EZJ,SIJSQ,
+     +                  RUI,RUJ,UIJ,RIJSQ,
+     +		        xloverdi,xloverdj)
+
+            END IF
+
+
+            CALL ENERGY(RIJSQ,SIJSQ,RUI,RUJ,UIJ,DEIJ,ICORE)
+
+            IF(ICORE.EQ.1) GOTO 99
+
+ 22         ENEW=ENEW+DEIJ
+
+            
+ 2       CONTINUE
+ 5       LPOSI=LPOSI+N
+
+ 1    CONTINUE
+
+
+      ETOTALNEW=ENEW
+      
+
+C     THE PROBABILITY DISTRIBUTION FUNCTION FOR A NPT ENSEMBLE
+C     WITH BOX SIDE LENGTH CHANGES
+
+      DELU=ETOTALNEW-ETOTAL
+ 
+ 7    PDELV=PRESS*(VOLMENE-VOLMEOL)
+
+!     WARNING: REDUCED PRESSURE P*=P sigma**3/epsilon INSTEAD OF OLD P*=P sigma**3/kT
+
+
+      DELH=PDELV + DELU - (XN+1.D0)*log(VOLMENE/VOLMEOL)*TEMP
+
+      IF(DELH.LT.0.0D00) GOTO 999
+
+
+C     CHOOSE A RANDOM NUMBER (0,1)
+
+      IF(RAN2(ISEED).GT.DEXP(-DELH/TEMP)) GOTO 99 ! Move rejected
+
+
+C     ACCEPTANCE
+ 
+ 999  ACC(8)=ACC(8)+1.0D00  ! Move accepted and counters updated
+
+
+C     UPDATE THE ENERGY
+
+      ETOTAL=ETOTALNEW      ! Energy updated
+
+
+C     UPDATING BOXLENGTHS AND POSITIONS
+
+      XC=XCN
+      YC=YCN
+      ZC=ZCN
+
+      XC2=XC*0.5d0
+      YC2=YC*0.5d0
+      ZC2=ZC*0.5d0
+
+      do 1941 I=1,N
+         RX(I)=RX(I)*XC/XCO ! Rescaling
+         RY(I)=RY(I)*YC/YCO
+         RZ(I)=RZ(I)*ZC/ZCO
+ 1941 CONTINUE
+
+      IF (RX(I).LT.0.0D0) THEN
+         RX(I)=RX(I)+XC   
+      ELSEIF (RX(I).GE.XC) THEN
+         RX(I)=RX(I)-XC   
+      ENDIF
+      IF (RY(I).LT.0.0D0) THEN
+         RY(I)=RY(I)+YC   
+      ELSEIF (RY(I).GE.YC) THEN
+         RY(I)=RY(I)-YC   
+      ENDIF
+      IF (RZ(I).LT.0.0D0) THEN
+         RZ(I)=RZ(I)+ZC   
+      ELSEIF (RZ(I).GE.ZC) THEN
+         RZ(I)=RZ(I)-ZC   
+      ENDIF
+
+C     IF REJECTION, THE SYSTEM JUMPS DIRECTLY TO HERE
+
+ 99   CONTINUE
+
+      VOLME=XC*YC*ZC
+      RHO=XN/VOLME
+      ETA=(XN_rods*VM_rods+XN_sph*VM_sph)/VOLME
+
+      RETURN
+      END                         
+      
+
+! *************************************************************
+! *************************************************************
+
+      SUBROUTINE ENERGY(RIJSQ,SIJSQ,RUI,RUJ,UIJ,DEIJ,ICORE)
+
+      INCLUDE 'mcnptv06.inc'
+
+      ICORE=0
+      DEIJ=0.D0
+
+!     Potential Type 3
+
+      IF(NLRANGE.EQ.3) THEN
+         IF(SIJSQ.LT.1.D0) THEN
+            ICORE=1
+            GOTO 23
+         ENDIF
+         DEIJ=0.0D0
+         GOTO 23  
+      ENDIF
+
+!     Potential Type 4
+
+      IF(NLRANGE.EQ.4) THEN
+         IF(SIJSQ.LT.1.D0) THEN
+            ICORE=1
+            GOTO 23
+         ENDIF
+         IF(SIJSQ.LE.SWRANGE2) DEIJ=WELL
+         IF(SIJSQ.GT.SWRANGE2) DEIJ=0.0
+         GOTO 23
+      ENDIF
+
+      IF(SIJSQ.GT.POTRANGE2) THEN
+         DEIJ=0.
+         GOTO 23
+      ENDIF
+
+      SSRED=1.D0/SIJSQ
+
+!     Potential Type 5
+
+      IF(NLRANGE.EQ.5) THEN
+         DEIJ= 4.d0*(SSRED**6- SSRED**3 + 0.25d0)
+         GOTO 23
+      ENDIF
+
+!     Potential Type 6
+
+      IF(NLRANGE.EQ.6) THEN
+         DEIJ= 4.d0*(SSRED**6-SSRED**3) 
+         GOTO 23
+      ENDIF
+
+!     Potential Type 7 or 8
+
+      IF(NLRANGE.eq.7.OR.NLRANGE.eq.8) THEN
+*     calculate the anisotropic well
+         RRR=DSQRT(RIJSQ)
+         RUIN=RUI/RRR
+         RUJN=RUJ/RRR
+         EGO=1/(SQRT(1-CHI*CHI*UIJ*UIJ))
+         EGB=1 - CHIP/2.*
+     &        ((RUIN+RUJN)**2/(1.d0+CHIP*UIJ)+
+     &        (RUIN-RUJN)**2/(1.d0-CHIP*UIJ))
+         EWELL=EGO**XNU*EGB**XMU
+*     GB-K potential
+         IF(NLRANGE.eq.7) THEN
+            DEIJ= 4.d0*(SSRED**6-SSRED**3) 
+*     potential displaced to make it zero at rcut=potrange
+            POTR2=1.D0/POTRANGE2
+            ESHIFT= 4.d0*(POTR2**6-POTR2**3)
+            DEIJ=(DEIJ-ESHIFT)*EWELL
+            GOTO 23
+         ENDIF
+*     GB potential
+         IF(NLRANGE.eq.8) THEN
+            SGB1= (RUIN+RUJN)**2/(1.d0+CHI*UIJ)  
+            SGB2= (RUIN-RUJN)**2/(1.d0-CHI*UIJ)  
+            SGB= (1.D0-0.5D0*CHI*(SGB1+SGB2))**(-0.5)  
+            IF(CHI.gt.0.d0) RGB= RRR-SGB+1
+            IF(CHI.le.0.d0) RGB= RRR/XK_rod-SGB/XK_rod+1
+            DEIJ= RGB**(-12)-RGB**(-6) 
+            DEIJ= 4.D0*EWELL*DEIJ        
+            GOTO 23
+         ENDIF
+      ENDIF
+
+
+!     ******************
+!     *Potential Type 9*
+!     ******************
+      
+      IF(NLRANGE.eq.9) THEN
+
+         IF(SIJSQ.LT.1.D0) THEN  ! There is an overlap
+            ICORE=1
+            GOTO 23
+         ENDIF
+
+         sij=dsqrt(sijsq)/(dm)   ! Minimum distance calculated
+     
+         if(sij.gt.1.d0) then
+
+            xff=0.d0
+            vex=0.d0
+            deij=0.d0
+      
+         else
+       
+            xff=dm*dm*(acos(sij)-sij*dsqrt(1.d0-sij*sij)) 
+            xlac=-ruj-uij*xld2_rod
+            xlad=-ruj+uij*xld2_rod
+            xmua=rui-uij*xld2_rod
+            xmub=rui+uij*xld2_rod
+            
+            if(dabs(xlac).gt.xld2_rod.and.
+     +         dabs(xlad).gt.xld2_rod) then
+         
+               dell=0.d0
+           
+            else
+            
+               if(xlac.lt.-xld2_rod) xlac=-xld2_rod
+               if(xlad.lt.-xld2_rod) xlad=-xld2_rod
+               if(xlac.gt.xld2_rod)  xlac=xld2_rod
+               if(xlad.gt.xld2_rod)  xlad=xld2_rod
+
+               dell=dabs(xlad-xlac)
+            
+            endif
+            
+            if(dabs(xmua).gt.xld2_rod.and.dabs(xmub).gt.xld2_rod) then
+
+               delm=0.d0
+
+            else
+
+               if(xmua.lt.-xld2_rod) xmua=-xld2_rod
+               if(xmub.lt.-xld2_rod) xmub=-xld2_rod
+               if(xmua.gt.xld2_rod)  xmua=xld2_rod
+               if(xmub.gt.xld2_rod)  xmub=xld2_rod
+
+               delm=dabs(xmua-xmub)
+
+            endif
+
+            xi=((chix*dell+dm)**2-dm*dm)/((chix*dell+dm)**2+dm*dm)
+     :           *((chix*delm+dm)**2-dm*dm)/
+     :           ((chix*delm+dm)**2+dm*dm)   ! chix=2.74785 in *.inp file
+
+            ! vex=excluded volume between HSC due to the polymer
+
+            vex=e0/dsqrt(1.d0-xi*uij*uij)*xff   ! e0=0.546528 in *.inp file
+
+            deij=-vex/temp*fug
+
+         endif
+         GOTO 23
+      ENDIF
+
+
+ 23   RETURN
+      END
+
+
+!*****************************************************************
+!*********Computation of Minimum Distance*************************
+!*****************************************************************
+
+      SUBROUTINE DMIN(X,Y,Z,EEXI,EEYI,EEZI,EEXJ,EEYJ,EEZJ,
+     +     SIJSQ,RUI,RUJ,UIJ,RIJSQ)
+
+      INCLUDE 'mcnptv06.inc'
+
+
+      RUI=X*EEXI+Y*EEYI+Z*EEZI  
+      RUJ=X*EEXJ+Y*EEYJ+Z*EEZJ  
+      
+      UIJ=EEXI*EEXJ+EEYI*EEYJ+EEZI*EEZJ    
+
+      SINSQ=1.0D00-UIJ*UIJ
+
+      ! The distance is minimized by differentiating over CI and CJ
+      ! and these are the results 
+
+      IF (SINSQ.LT.1.0D-32) THEN  ! IF the angle between I and J is zero
+         CI=-RUI*0.5d0
+         CJ= RUJ*0.5d0
+      ELSE
+         CI=(-RUI+UIJ*RUJ)/SINSQ  ! In the most general case
+         CJ=(RUJ-UIJ*RUI)/SINSQ
+      ENDIF
+
+!     CHECKING IF CI OR CJ ARE GREATER THAN 0.5*L
+      
+      IF (DMAX1(DABS(CI),DABS(CJ)).LT.XLD2_rod) GOTO 641
+    
+      IF (DABS(CI).GE.DABS(CJ)) THEN
+         CI=DSIGN(XLD2_rod,CI)
+         CJ=RUJ+CI*UIJ
+      ELSE
+         CJ=DSIGN(XLD2_rod,CJ)
+         CI=CJ*UIJ-RUI
+      ENDIF
+
+      IF (DABS(CI).GT.XLD2_rod) CI=DSIGN(XLD2_rod,CI)  ! CI and CJ cannot be greater than 0.5*L
+      IF (DABS(CJ).GT.XLD2_rod) CJ=DSIGN(XLD2_rod,CJ)  
+
+ 641  CONTINUE
+
+      DI=2.0D00*RUI+CI-CJ*UIJ
+      DJ=-2.0D00*RUJ+CJ-CI*UIJ
+
+      SIJSQ=RIJSQ+CI*DI+CJ*DJ    ! MINIMUM DISTANCE 
+
+      RETURN
+
+      END    
+
+!     *****************************************************************************
+!     *****************************************************************************
+
+      SUBROUTINE DMIN2(X,Y,Z,EEXI,EEYI,EEZI,EEXJ,EEYJ,EEZJ,
+     +                 SIJSQ,RUI,RUJ,UIJ,RIJSQ,xloverdi,xloverdj)
+
+      INCLUDE 'mcnptv06.inc'
+
+      if (abs(xloverdi-xloverd_rod).lt.1e-9) then
+        RUI=X*EEXI+Y*EEYI+Z*EEZI  
+      else 
+        RUI=X*EEXJ+Y*EEYJ+Z*EEZJ 
+      end if
+
+      UIJ=1.d0
+
+      RUJ=RUI
+
+
+      IF (dabs(RUI).lt.xld2_rod) then
+
+        SIJSQ=RIJSQ-(RUI*RUI)
+
+      ELSE
+
+        SIJSQ=(dabs(RUI)-xld2_rod)**2+(RIJSQ-(RUI*RUI))
+
+      END IF
+      
+      SSRED=1.D0/SIJSQ
+
+      
+      RETURN
+
+      END    
+
+!*****************************************************************************
+!*****************************************************************************
+
+      SUBROUTINE OVERLAP
+
+      INCLUDE 'mcnptv06.inc'
+
+      WRITE(49,99)   
+      
+      M=0
+      ETOTAL=0.0D0
+
+      DO 2 I=1,N-1
+
+         RXI=RX(I)
+         RYI=RY(I)
+         RZI=RZ(I)
+         EXI=EX(I)
+         EYI=EY(I)
+         EZI=EZ(I)
+         xloverdi=xloverd(I)
+
+         DO 3 J=I+1,N
+
+            RXJ=RX(J)
+            RYJ=RY(J)
+            RZJ=RZ(J)
+            EXJ=EX(J)
+            EYJ=EY(J)
+            EZJ=EZ(J)
+            xloverdj=xloverd(J)
+
+            RXIJ=RXI-RXJ
+            RYIJ=RYI-RYJ
+            RZIJ=RZI-RZJ
+            
+            IF (RXIJ.LT.-XC2) THEN
+               RXIJ=RXIJ+XC
+            ELSEIF (RXIJ.GE.XC2) THEN
+               RXIJ=RXIJ-XC
+            ENDIF
+            
+            IF (RYIJ.LT.-YC2) THEN
+               RYIJ=RYIJ+YC
+            ELSEIF (RYIJ.GE.YC2) THEN
+               RYIJ=RYIJ-YC
+            ENDIF
+            
+            IF (RZIJ.LT.-ZC2) THEN
+               RZIJ=RZIJ+ZC
+            ELSEIF (RZIJ.GE.ZC2) THEN
+               RZIJ=RZIJ-ZC
+            ENDIF
+
+            RIJSQ=RXIJ*RXIJ+RYIJ*RYIJ+RZIJ*RZIJ
+
+            IF(RIJSQ.GT.(POTRANGE+MAX(1.D0,XLOVERD_rod)+1.D0)**2) THEN
+               DEIJ=0.D0
+               GOTO 98
+            ENDIF
+
+*     Computation of Minimum Distance (SIJSQ)
+
+            IF (i.le.nrods .AND.
+     +          j.le.nrods) then
+
+               CALL DMIN(RXIJ,RYIJ,RZIJ,EXI,EYI,EZI,
+     +			 EXJ,EYJ,EZJ,SIJSQ,
+     +           	 RUI,RUJ,UIJ,RIJSQ)
+
+            ELSE IF (i.gt.nrods .AND.
+     +               j.gt.nrods) then
+
+               SIJSQ=RIJSQ
+
+            ELSE
+
+               CALL DMIN2(RXIJ,RYIJ,RZIJ,EXI,EYI,EZI,
+     +			  EXJ,EYJ,EZJ,SIJSQ,
+     +           	  RUI,RUJ,UIJ,RIJSQ,
+     +		          xloverdi,xloverdj)
+
+            END IF
+
+
+            IF(SIJSQ.LT.1.D0) M=M+1 ! In this case there are overlaps
+
+            FCHI=0.D0
+
+            CALL ENERGY(RIJSQ,SIJSQ,RUI,RUJ,UIJ,DEIJ,ICORE)
+            
+c            call ExtraEnergy(I,RX(I),RY(I),RZ(I),EX(I),EY(I),EZ(I),
+c           &                       UD_OUT,URF_OUT,USW_OUT);
+c            OLD_USW=USW_OUT;
+c            call ExtraEnergy(I,XNEW,YNEW,ZNEW,EXNEW,EYNEW,EZNEW,
+c           &                       UD_OUT,URF_OUT,USW_OUT);
+c            ENEW_USW=USW_OUT; 
+            
+c            CALL ENDIP(RXIJ,RYIJ,RZIJ,EXI,EYI,EZI,EXJ,EYJ,EZJ,
+c     +           DEIJP)
+       call ExtraEnergy(I,RXIJ,RYIJ,RZIJ,EXI,EYI,EZI,
+     &                       UD_OUT,URF_OUT,USW_OUT);
+            
+     
+     
+
+ 97         IF(ICORE.EQ.1) GOTO 3
+            
+ 98         IPOSTN=J-I+N*(I-1)-(I*(I-1))/2
+                        
+            ETOTAL=ETOTAL+DEIJ+USW_OUT
+            
+ 3       CONTINUE
+    2 CONTINUE
+
+      IF(NLRANGE.GT.3.) WRITE(49,*) 'ETOTAL=',ETOTAL/XN
+
+      IF (M.EQ.0) THEN
+         WRITE(49,102)
+      ELSE 
+         WRITE(49,*) 'THERE ARE ',M,' OVERLAPS (in HSC sense)'
+         WRITE(6,*) 'THERE ARE ',M,' OVERLAPS (in HSC sense)'
+         IF(NLRANGE.EQ.3.OR.NLRANGE.EQ.4.or.nlrange.eq.8) STOP
+      ENDIF  
+ 
+ 99   FORMAT(/,1X,'LOOKING FOR OVERLAPPING PARTICLES',/)
+ 100  FORMAT(1X,'PARTICLE ',I4,'    OVERLAPS WITH
+     +     PARTICLE ',I4)
+ 101  FORMAT(1X,'R(',I4,')-R(',I4,')=',F12.8,' S=',F12.8)
+ 102  FORMAT(1X,'NO OVERLAPS',/)
+      
+      RETURN
+      
+      END
+
+************************************************
+      
+
+      FUNCTION RAN2(IDUM)
+      INCLUDE 'mcnptv06.inc'
+*     PARAMETER (IM1=2147483563,IM2=2147483399,AM=1.0D00/IM1,
+*     &  IMM1=IM1-1,IA1=40014,IA2=40692,IQ1=53668,IQ2=52774,IR1=12211,
+*     &  IR2=3791,NTAB=32,NDIV=1+IMM1/NTAB)
+      PARAMETER (IM1=2147483563,IM2=2147483399,
+     &     IA1=40014,IA2=40692,IQ1=53668,IQ2=52774,IR1=12211,
+     &     IR2=3791,NTAB=32)
+      PARAMETER(EPS=1.2D-14,RNMX=1.0D00-EPS)
+C     RAN2 OF NUMERICAL RECIPES 2ND ED.
+      DIMENSION IV(NTAB)
+      SAVE IV,IY,IDUM2
+      DATA IDUM2/123456789/,IV/NTAB*0/,IY/0/
+      AM=1.d0/im1
+      IMM1=IM1-1
+      Ndiv=1+IMM1/NTAB
+      IF (IDUM.LE.0)THEN
+C     WRITE(6,*)'INIT.',IDUM
+         IDUM=MAX(-IDUM,1)
+         IDUM2=IDUM
+         DO J=NTAB+8,1,-1
+            K=IDUM/IQ1
+            IDUM=IA1*(IDUM-K*IQ1)-K*IR1
+            IF(IDUM.LT.0)IDUM=IDUM+IM1
+            IF(J.LE.NTAB)IV(J)=IDUM
+         ENDDO
+         IY=IV(1)
+      ENDIF
+      K=IDUM/IQ1
+      IDUM=IA1*(IDUM-K*IQ1)-K*IR1
+      IF(IDUM.LT.0)IDUM=IDUM+IM1
+      K=IDUM2/IQ2
+      IDUM2=IA2*(IDUM2-K*IQ2)-K*IR2
+      IF(IDUM2.LT.0)IDUM2=IDUM2+IM2
+      J=1+IY/NDIV
+      IY=IV(J)-IDUM2
+      IV(J)=IDUM
+      IF(IY.LT.1)IY=IY+IMM1
+      RAN2=MIN(AM*IY,RNMX)
+      RETURN
+      END
+
+*************************************************************
+
+      SUBROUTINE SLIST(istart_list)
+
+      INCLUDE 'mcnptv06.inc'
+
+      DO I=1,N
+         RDX(I,istart_list)=0.0D00
+         RDY(I,istart_list)=0.0D00
+         RDZ(I,istart_list)=0.0D00
+      END DO
+
+      DO I=1,N
+         NPE(I)=0
+      END DO
+    
+      LPOSI=1
+
+      DO 2 I=1,N-1
+
+         NPET=NPE(I)
+
+         RXI=RX(I)
+         RYI=RY(I)
+         RZI=RZ(I)
+         
+         LPOSJ=LPOSI+N
+        
+         DO 3 J=I+1,N
+           
+            X=RX(J)-RXI
+            Y=RY(J)-RYI
+            Z=RZ(J)-RZI
+            
+C     MINIMUM IMAGE CONVENTION
+
+            IF (X.LT.-XC2) THEN
+               X=X+XC
+            ELSEIF (X.GE.XC2) THEN
+               X=X-XC
+            ENDIF
+
+            IF (Y.LT.-YC2) THEN
+               Y=Y+YC
+            ELSEIF (Y.GE.YC2) THEN
+               Y=Y-YC
+            ENDIF
+
+            IF (Z.LT.-ZC2) THEN
+               Z=Z+ZC
+            ELSEIF (Z.GE.ZC2) THEN
+               Z=Z-ZC
+            ENDIF
+            
+C     CHECK IF PARTICLE J IS WITHIN RC OF I
+
+            RR=X*X+Y*Y+Z*Z
+            
+            IF (RR.LT.RCRC) THEN
+               
+               NLIST(LPOSI+NPET)=J     ! particle (between 1 and N) added to the list
+               NLIST(LPOSJ+NPE(J))=I   ! total number of the lists
+               
+               NPET=NPET+1             ! neighbor added to the list 
+               NPE(J)=NPE(J)+1
+               
+                          
+            ENDIF
+            
+            LPOSJ=LPOSJ+N
+                        
+ 3       CONTINUE
+
+         LPOSI=LPOSI+N
+         NPE(I)=NPET     ! Total number of neighbors to a given particle I
+        
+
+ 2    CONTINUE
+
+      NCALLN=NCALLN+1
+
+      RETURN
+      END
+
+
+! *************************************************************
+! *************************************************************
+      subroutine ROTMOLAXIS2(EXI,EYI,EZI,STHETAI,EXNEW,EYNEW,EZNEW)
+
+      include 'mcnptv06.inc'
+
+9371  em1=ran2(iseed)-0.5d0
+      em2=ran2(iseed)-0.5d0
+      em3=ran2(iseed)-0.5d0
+
+      xp=em1*exi+em2*eyi+em3*ezi
+
+      em1=em1-xp*exi
+      em2=em2-xp*eyi
+      em3=em3-xp*ezi
+
+      xp=dsqrt(em1*em1+em2*em2+em3*em3)
+
+      if (dabs(xp).lt.1e-9) then
+         goto 9371
+      end if
+
+      em1=em1/xp
+      em2=em2/xp
+      em3=em3/xp
+
+      wx=em2*ezi-em3*eyi
+      wy=em3*exi-em1*ezi
+      wz=em1*eyi-em2*exi
+
+      xp=dsqrt(wx*wx+wy*wy+wz*wz)
+
+      wx=wx/xp
+      wy=wy/xp
+      wz=wz/xp
+
+      D1=DISPTH*(RAN2(ISEED)-0.5d0)
+      D2=DISPTH*(RAN2(ISEED)-0.5d0)
+
+!      D12=2.d0*dsqrt(2.d0)*DISPTH*(RAN2(ISEED)-0.5d0)
+
+      dex=d1*wx+d2*em1
+      dey=d1*wy+d2*em2
+      dez=d1*wz+d2*em3
+
+!      dex=d12*(wx+em1)
+!      dey=d12*(wy+em2)
+!      dez=d12*(wz+em3)
+
+      exnew=exi+dex
+      eynew=eyi+dey
+      eznew=ezi+dez
+
+      EXEYEZ=DSQRT(EXNEW*EXNEW+EYNEW*EYNEW+EZNEW*EZNEW)
+      EXNEW=EXNEW/EXEYEZ
+      EYNEW=EYNEW/EXEYEZ
+      EZNEW=EZNEW/EXEYEZ
+
+      return
+
+      end
+
+! *************************************************************
+! *************************************************************
+! *************************************************************
+
+      SUBROUTINE GOFR
+
+C     CALCULATES THE CENTRE OF MASS PAIR DISTRIBUTION FUNCTION G(1,I),
+C     THE DIRECTOR G(3,I)
+C     G(R) IS THE PROBABILITY OF FINDING PARTICLES A DISTANCE R FROM A CHOSEN
+C     PARTICLE NORMALISED BY THE IDEAL VALUE OF RHO*
+C     THIS SUBROUTINE GENERATES THE HISTOGRAMS
+      INCLUDE 'mcnptv06.inc'
+
+      RRMAX=AHI2
+!     write(*,*) 'en gofr'
+
+      DO 1 I=1,N-1
+C     SAVE POSITION OF I FOR FASTER LOOP ACCESS
+         RXI=RX(I)
+         RYI=RY(I)
+         RZI=RZ(I)
+         EXI=EX(I)
+         EYI=EY(I)
+         EZI=EZ(I)
+         DO 2 J=I+1,N
+C     SAVE POSITION OF J FOR FASTER LOOP ACCESS
+            RXJ=RX(J)
+            RYJ=RY(J)
+            RZJ=RZ(J)
+            EXJ=EX(J)
+            EYJ=EY(J)
+            EZJ=EZ(J)
+C     DISTANCE BETWEEN POINTS OF CONTACT
+            X=RXI-RXJ
+            Y=RYI-RYJ
+            Z=RZI-RZJ
+C     MINIMUM IMAGE CONVENTION
+            IF (X.LT.-XC2) THEN
+               X=X+XC
+            ELSEIF (X.GE.XC2) THEN
+               X=X-XC
+            ENDIF
+            IF (Y.LT.-YC2) THEN
+               Y=Y+YC
+            ELSEIF (Y.GE.YC2) THEN
+               Y=Y-YC
+            ENDIF
+            IF (Z.LT.-ZC2) THEN
+               Z=Z+ZC
+            ELSEIF (Z.GE.ZC2) THEN
+               Z=Z-ZC
+            ENDIF
+C     IF THE TWO PARTICLES ARE MORE THAN HALF THE BOX LENGTH APART WE DO NOT 
+C     COUNT THEM AS BEING WITHIN THE G OF R RANGE IE THE MAXIMUM R IS HALF THE  
+C     BOX LENGTH. IF WE ALLOW R TO BE LARGER THAN THIS WE WOULD START TO SEE 
+C     PERIODIC IMAGES AND THIS WOULD BE SILLY. 
+C     NOW DEFINE THE DISTANCE ALONG THE DIRECTOR BETWEEN THE TWO PARTICLES
+            RR=X*X+Y*Y+Z*Z
+            IF (RR.LT.RRMAX) THEN
+C     WE READ IN XHISTG (THE NUMBER OF HISTOGRAMS) AND WE DIVIDE THE SPACE BETWEEN
+C     THE DIAMETER OF THE SPHERE AND HALF THE BOX LENGTH INTO XHISTG EQUAL SPACES
+C     NOTE THERE ARE DIFFERENT G OF R'S THIS ONE IS CENTRE-CENTRE DISTRIBUTION 
+              
+               R=DSQRT(RR)   ! Distance between particles i and j
+               IR=INT(R*XHISTG/AHI)+1 ! Number of layers between i and j
+               G(1,IR)=G(1,IR)+1.0D00
+
+               EIJ=EXI*EXJ+EYI*EYJ+EZI*EZJ
+               EIJ2=EIJ*EIJ
+               EIJ3=EIJ2*EIJ
+               EIJ4=EIJ3*EIJ
+               EIJ5=EIJ4*EIJ
+               EIJ6=EIJ5*EIJ
+
+*     CONDITIONAL DISTRIB. OF RELATIVE ORIENTATIONS G(cos(theta)|R) (FOR CALCULATION OF ENTROPY) 
+*     ITHE= INT((EIJ+1)*20) + 1
+*     GTHER(IR,ITHE)= GTHER(IR,ITHE) + 1.0D0  
+               
+C     FIRST LEGENDRE POLYNOMIAL
+               P1G=EIJ
+               GO(1,IR)=GO(1,IR)+P1G
+C     SECOND LEGENDRE POLYNOMIAL
+               P2G=(3.0D00*EIJ2-1.0D00)/2.0D00
+               GO(2,IR)=GO(2,IR)+P2G
+C     THIRD LEGENDRE POLYNOMIAL
+               P3G=(5.00D00*EIJ3-3.0D00*EIJ)/2.D00
+               GO(3,IR)=GO(3,IR)+P3G
+C     FOURTH LEGENDRE POLYNOMIAL
+               P4G=(35.0D00*EIJ4-30.0D00*EIJ2+3.0D00)/8.0D00
+               GO(4,IR)=GO(4,IR)+P4G
+C     FIFTH LEGENDRE POLYNOMIAL
+*     P5G=(63.0D00*EIJ5-70.0D00*EIJ3+15.0D00*EIJ)/8.0D00
+*     GO(5,IR)=GO(5,IR)+P5G
+C     SIXTH LEGENDRE POLYNOMIAL
+*     P6G=(231.0D00*EIJ2*EIJ4-315.0D00*EIJ4+
+*     +                 105.0D00*EIJ2-5.0D00)/16.0D00
+*     GO(6,IR)=GO(6,IR)+P6G
+*     
+C     DISTRIBUTION FUNCTION FOR A DISTANCE RN ALONG THE DIRECTOR FROM
+C     A PLANE CONTAINING PARTICLE I
+C     DISTRIBUTION IN PLANES PERPENDICULAR TO THE DIRECTOR
+C     (equal projections along the director)
+
+               AN=DIX*X+DIY*Y+DIZ*Z  ! Scalar product between the director coordinates 
+               DAN=DABS(AN)          ! and those of the particles=projection of R on DN
+                                     ! AN IS THE PROJECTION OF THE DISTANCE BETWEEN  I AND J
+                                     ! ALONG THE NEMATIC DIRECTOR =>> AN=R_PARALLEL
+  
+               IF(DAN.LT.AHI) THEN
+                  IRN=INT((AN+AHI)*XHISTG/(2.*AHI))+1
+                  G(4,IRN)=G(4,IRN)+1.0D00
+                  ACC(40)=ACC(40)+1
+!     write(*,*) 'peo ',acc(40)
+               ENDIF
+
+C     DISTRIBUTION FUNCTION FOR A DISTANCE RP PERPENDICULAR TO THE DIRECTOR
+C     DISTRIBUTION IN CYLINDER-SLICES PARALLEL TO THE DIRECTOR
+c     (equal perpendicular projections to the director)
+
+               RP=DSQRT(RR-(DAN*DAN)) ! RP IS R_PERPENDICULAR
+
+               IF(RP.LT.AHI) THEN     
+                  IRP=INT(RP*XHISTG/AHI)+1    
+                  G(5,IRP)=G(5,IRP)+1.0D00  
+                  ACC(41)=ACC(41)+1
+               ENDIF
+
+C     G OF R A DISTANCE RN ALONG THE DIRECTOR
+*     (perpendicular projection RNMAX<sigma/2, and parallel within box RNMAX<AHI)
+C     (MOVING WITHIN A CYLINDER OF DIAMETER SIGMA ABOVE AND BELOW THE PARTICLE)
+
+               IF(RP.LT.RNMAX.AND.DAN.LT.RNMAX2)THEN
+                  IRN=INT(XHISTG*DAN/AHI)+1
+                  G(6,IRN)=G(6,IRN)+1.0D00
+                  GO(7,IRN)=GO(7,IRN)+EIJ2
+                  ACC(42)=ACC(42)+1
+               ENDIF
+
+C     G OF R A DISTANCE RP PERPENDICULAR TO THE DIRECTOR
+
+               IF(DAN.LE.RPMAX.AND.RP.LT.RPMAX2)THEN
+                  G(7,IRP)=G(7,IRP)+1.0D00
+                  GO(9,IRP)=GO(9,IRP)+EIJ2
+                  ACC(43)=ACC(43)+1
+               ENDIF
+
+C     This is the g_12 of de Miguel et al JCP 121 (2004) p.11183
+C     This distribution looks into the layer-layer correlation
+
+               RPMAX3=DSQRT(RRMAX-(XLOVERD_rod+1.d0+RPMAX)**2.)
+
+               IF(DAN.gt.(XLOVERD_rod+1.d0-RPMAX).AND.
+     1          DAN.le.(XLOVERD_rod+1.d0+RPMAX).and.RP.LT.RPMAX3) THEN
+                  G(11,IRP)=G(11,IRP)+1.0d00
+*     ACC(49)=ACC(49)+1
+               ENDIF
+
+c     radial distribution between one layer and one not adjacment
+c     only valid if the box is big enough 
+c     g_13 in de Miguel paper AQUI
+
+               ppeo4=RRMAX-(2.d0*XLOVERD_rod+1.8d0+RPMAX)**2.
+
+               if(ppeo4.gt.0.d0)then
+                  RPMAX4=DSQRT(RRMAX-(2.d0*XLOVERD_rod+1.8d0+RPMAX)**2.)
+                  IF(DAN.gt.(2.*XLOVERD_rod+1.8d0-RPMAX).AND.
+     1                 DAN.le.(2.*XLOVERD_rod+1.8d0+RPMAX).and.
+     1                 RP.LT.RPMAX4) THEN
+*     1           DAN.le.(2.*XLOVERD_rod+1.8d0+RPMAX)) THEN
+                     G(14,IRP)=G(14,IRP)+1.0d00
+*     ACC(45)=ACC(45)+1
+                  ENDIF
+               endif
+
+               ppeo5=RRMAX-(3.d0*XLOVERD_rod+2.7d0+RPMAX)**2.
+
+               if(ppeo5.gt.0.d0)then
+                  RPMAX5=DSQRT(RRMAX-(3.d0*XLOVERD_rod+2.7d0+RPMAX)**2.)
+                  IF(DAN.gt.(3.*XLOVERD_rod+2.7d0-RPMAX).AND.
+     1                 DAN.le.(3.*XLOVERD_rod+2.7d0+RPMAX).and.
+     1                 RP.LT.RPMAX5) THEN
+*     1        DAN.le.(3.*XLOVERD_rod+2.7d0+RPMAX)) THEN
+                     G(15,IRP)=G(15,IRP)+1.0d00
+*     ACC(48)=ACC(48)+1
+                  ENDIF
+               endif
+
+            ENDIF
+
+c     radial distribution between one layer and one not adjacment
+c     only valid if nematic director is in z axis
+c     g_13 in de Miguel paper AQUI
+      
+            RPMAX4=DSQRT(RRMAX-(2.d0*XLOVERD_rod+2.d0+RPMAX)**2.)
+            AN=DIX*X+DIY*Y+DIZ*Z
+            DAN=DABS(AN)
+            RP=DSQRT(RR-(DAN*DAN))
+            IRP=INT(RP*XHISTG/AHI)+1
+            
+            if(IRP.le.ng) then
+               if(irp.gt.500) write(*,*) 'IRP',IRP
+
+               IF(DAN.gt.(2.d0*XLOVERD_rod+2.d0-RPMAX).AND.
+     1              DAN.le.(2.d0*XLOVERD_rod+2.d0+RPMAX)) THEN
+                  G(12,IRP)=G(12,IRP)+1.0d00
+                  ACC(46)=ACC(46)+1
+               ENDIF
+c     g_14 in de Miguel paper AQUI
+               RPMAX5=DSQRT(RRMAX-(3.d0*XLOVERD_rod+3.d0+RPMAX)**2.)
+               IF(DAN.gt.(3.d0*XLOVERD_rod+3.d0-RPMAX).AND.
+     1              DAN.le.(3.d0*XLOVERD_rod+3.d0+RPMAX)) THEN
+                  G(13,IRP)=G(13,IRP)+1.0d00
+                  ACC(47)=ACC(47)+1
+               ENDIF
+            endif
+
+
+            
+ 2       CONTINUE
+*     
+         OMCOSI=(DIX*EXI)+(DIY*EYI)+(DIZ*EZI)
+         OMDOSI=DABS(OMCOSI)
+         JR=INT(OMDOSI*XHISTG)+1
+         OMI=DACOS(OMDOSI)
+         IR=INT(OMI*2.0D00*XHISTG/PI)+1
+         F(1,IR)=F(1,IR)+1.0D00
+         F(2,JR)=F(2,JR)+1.0D00
+
+ 1       CONTINUE
+
+         RETURN
+         END
+
+
+! *************************************************************
+      SUBROUTINE RADIAL
+
+C     SUBROUTINE RADIAL UNRAVELS THE HISTOGRAMS PRODUCED BY GOFR
+      INCLUDE 'mcnptv06.inc'
+
+      DELR1=AHI/XHISTG
+      DELR2=2.D0*AHI/XHISTG
+
+      IF (NINT(ACC(3)).EQ.0) RETURN
+
+      OPEN(UNIT=61,FILE='mc-gr.dat',status='unknown')
+      OPEN(UNIT=64,FILE='mc-gpar.dat',status='unknown')
+      OPEN(UNIT=65,FILE='mc-gper.dat',status='unknown')
+      OPEN(UNIT=66,FILE='mc-radmin.dat',status='unknown')
+      
+      OPEN(UNIT=76,FILE='mc-gor.dat',status='unknown')
+      OPEN(UNIT=82,FILE='mc-p2parper.dat',status='unknown')
+      OPEN(UNIT=74,FILE='ftheta.dat',status='unknown')
+*     OPEN(UNIT=48,FILE='GTHER.gor',status='unknown')
+
+
+      IF(LVOL) THEN
+         VOLMEAV=ACC(11)/ACC(7)
+      ELSE
+         VOLMEAV=XC*YC*ZC
+      ENDIF
+      
+      DO 1 L=1,NHISTG
+         XIR=DFLOAT(L)
+         R1=(XIR-0.5)*DELR1
+
+         RB1=(XIR-1.d0)*DELR1
+         RBSQ1=RB1*RB1
+         RBCU1=RBSQ1*RB1
+         RC1=RB1+DELR1
+         RC13=RC1*RC1*RC1
+         XAL1=DSQRT(DABS(AHI2-RB1*RB1))
+         XAL2=DSQRT(DABS(AHI2-RC1*RC1))
+
+C     CENTRE-OF-MASS RADIAL PAIR DISTRIBUTION FUNCTION
+
+         VS=(4.0D00/3.0D00)*PI*(RC13-RBCU1)
+
+         RHOS=XN*VS/VOLMEAV  
+
+         GR1=2.0D00*G(1,L)/(ACC(3)*XN*RHOS) 
+
+         GR1M=2.0D00*GM(L)/(ACC(3)*XN*RHOS) 
+
+         IF(GM(L).ne.0.d0) then 
+            GO2M=GOM(L)/GM(L)
+         else
+            go2m=0.d0
+         endif    
+
+*     CONDITIONAL DISTRIBUTION G(cos(theta)|R) FOR ENTROPY CALCULATION
+*     DO 9 IT=1,40
+*     IF(G(1,L).NE.0.) THEN
+*     GTHER(L,IT)= 0.5d0*GTHER(L,IT)/G(1,L)
+*     ELSE
+*     GTHER(L,IT)= 0.5d0 
+*     ENDIF
+*     9         CONTINUE  
+
+         
+C     ORIENTATIONAL RADIAL PAIR DISTRIBUTION FUNCTION
+         IF (G(1,L).NE.0.0D00) THEN
+            GO1=GO(1,L)/G(1,L)
+            GO2=GO(2,L)/G(1,L)
+            GO3=GO(3,L)/G(1,L)
+            GO4=GO(4,L)/G(1,L)
+         ELSE
+            GO1=0.0D00
+            GO2=0.0D00
+            GO3=0.0D00
+            GO4=0.0D00
+         ENDIF
+
+*     DIRECTIONAL DISTRIBUTIONS
+
+C     DISTRIBUTION IN PLANES PERPENDICULAR TO THE DIRECTOR
+c     (equal projections along the director)
+
+         R2=(XIR-0.5)*DELR2 - AHI
+
+*     VS=DELR2*PI*AHI**2 
+
+         VS=(2.d0*AHI)**3.d0*PI/XHISTG*
+     +        ((XIR-1.0D00/3.0D00-XIR**2.0D00)/XHISTG**2.0D00
+     +        +(XIR-0.5d0)/(XHISTG))
+         RHOS=XN*VS/VOLMEAV  
+         GR4=2.0D00*G(4,L)/(ACC(3)*XN*RHOS) 
+
+C     DISTRIBUTION IN CYLINDER-SLICES PARALLEL TO THE DIRECTOR
+c     (equal perpendicular projections to the director)
+
+*     VS=2.D0*AHI*PI*(RC1*RC1-RB1*RB1)
+
+         VS=TWOPI*(RC1*RC1*XAL2-RBSQ1*XAL1+(XAL1-XAL2)*AHI2
+     +        +(XAL2**3.0D00-XAL1**3.0D00)/3.0D00)
+         RHOS=XN*VS/VOLMEAV  
+         GR5=2.0D00*G(5,L)/(ACC(3)*XN*RHOS) 
+
+C     PAIR DISTRIBUTION ALONG THE DIRECTOR LINE
+C     (MOVING WITHIN A CYLINDER OF DIAMETER SIGMA ABOVE AND BELOW THE PARTICLE)
+
+         VS=PI*(2.D0*RNMAX)**2*DELR1
+         RHOS=XN*VS/VOLMEAV  
+         GR6=G(6,L)/(ACC(3)*XN*RHOS) 
+
+C     PAIR DISTRIBUTION WITHIN THE PLANE PERPENDICULAR TO THE DIRECTOR
+C     (IN-LAYER DISTRIBUTION FOR SMECTIC A AND B PHASES)
+C     (MOVING WITHIN A CYLINDER OF HEIGHT SIGMA AROUND THE PARTICLE C.M.)
+
+         VS=PI*2.D0*RPMAX*(RC1*RC1-RB1*RB1)
+         vss=vs
+
+!     write(98,6603) r1,rb1,rc1,delr1,rpmax,vs,pi
+
+         RHOS=XN*VS/VOLMEAV
+         GR7=2.0D00*G(7,L)/(ACC(3)*XN*RHOS)
+
+C     This is the g_11 of de Miguel et al JCP 121 (2004) p.11183
+C     This distribution looks into the layer-layer correlation
+
+         RPMAX3=DSQRT(RRMAX-(XLOVERD_rod+1.d0+RPMAX)**2.)
+
+!     IF(XIR.LE.RPMAX3) THEN
+
+         GR11=0.d0
+
+         IF(RC1.LE.RPMAX3) THEN
+            GR11=2.d0*G(11,L)/(ACC(3)*XN*RHOS)
+         ENDIF
+
+c     correlation between layers
+c     only valid if box is big enough . AQUI
+
+         ppeo4=RRMAX-(2.d0*XLOVERD_rod+1.8d0+RPMAX)**2.
+         GR14=0.d0
+
+         if(ppeo4.gt.0) then
+            RPMAX4=DSQRT(RRMAX-(2.d0*XLOVERD_rod+1.8d0+RPMAX)**2.)
+            IF(RC1.LE.RPMAX4) THEN
+               GR14=2.d0*G(14,L)/(ACC(3)*XN*RHOS)
+            endif
+         endif
+
+         ppeo5=RRMAX-(3.d0*XLOVERD_rod+2.7d0+RPMAX)**2.
+         GR15=0.d0
+
+         if(ppeo5.gt.0) then
+            RPMAX5=DSQRT(RRMAX-(3.d0*XLOVERD_rod+2.7d0+RPMAX)**2.)
+            IF(RC1.LE.RPMAX5) THEN
+               GR15=2.d0*G(15,L)/(ACC(3)*XN*RHOS)
+            endif
+         endif
+c     correlation between layers
+c     only valid if director is fix in z-axis. AQUI
+         vc=rpmax*xc*yc
+         gr12=g(12,l)/(acc(3)*xn*rhos)*2.d0
+         gr13=g(13,l)/(acc(3)*xn*rhos)*2.d0
+
+*     P2 directional distributions
+         IF (G(6,L).NE.0.0D00) THEN
+            GO7=GO(7,L)/G(6,L)
+         ELSE
+            GO7=0.0D00
+         ENDIF
+         IF (G(7,L).NE.0.0D00) THEN
+            GO9=GO(9,L)/G(7,L)
+         ELSE
+            GO9=0.0D00
+         ENDIF
+
+*     
+         OMI=PI*0.5D00*(2.0D00*XIR-1.0D00)/(2.0D00*XHISTG)
+         OMCOS=0.5D00*(2.0D00*XIR-1.0D00)/XHISTG
+         FOM=F(1,L)*XHISTG/(ACC(3)*(XN-1.0D00)*TWOPI*PI*DSIN(OMI))
+         FOMCOS=F(2,L)*XHISTG/(ACC(3)*(XN-1.0D00)*4.0D00*PI)
+
+         WRITE(74,*) OMI/PI,'    ',FOM,DACOS(OMCOS)/PI,'    ',FOMCOS
+*     
+         WRITE(61,6601) R1,GR1
+         WRITE(66,6601) R1,GR1M,GO2M
+         WRITE(64,6602) R2,GR4,R1,GR6
+         WRITE(65,6601) R1,GR5,GR7,GR11,gr12,gr13,gr14,gr15
+
+!     write(99,*) r1,g(14,l),g(15,L),ppeo4,ppeo5
+
+         WRITE(76,6601) R1,GO1,GO2,GO3,GO4
+         WRITE(82,6601) R1,GO7,GO9
+
+!     write(99,6601) r1,g(7,l),gr7,g(11,l),gr11,vss,acc(3)
+         
+*     WRITE(48,6603) R1,GR1,(GTHER(L,ITH), ITH=1,40)
+         
+    1 CONTINUE
+      
+      
+ 6601 FORMAT(F8.4,11(2X,1PE13.4))
+ 6602 FORMAT(F8.4,11(2X,1PE13.4))   !(F8.4,2X,1PE13.4,2X,F8.4,2X,1PE13.4)
+ 6603 FORMAT(1X,45(2X,1PE13.4))
+
+      RETURN
+      END
+
+
+*************************************************************
+      SUBROUTINE ORDER
+
+C     SUBROUTINE THAT CALCULATES THE ORDER PARAMETER
+C     S2=<P2(COS**2THETA)> AND THE DIRECTOR VECTOR ND (nematic director)
+C     GENERATE MATRIX 
+C     ( EX*EX  EX*EY  EX*EZ )
+C     A = ( EY*EX  EY*EY  EY*EZ )
+C     ( EZ*EX  EZ*EY  EZ*EZ )
+C     Q = SUM OVER N {A}/N  + SUM OVER N {I}/N
+C     DEFINITIONS:
+C     S2 IS THE LARGEST EIGENVALUE OF MATRIX Q
+C     ND IS THE LARGEST EIGENVECTOR OF MARTIX Q
+      
+      INCLUDE 'mcnptv06.inc'
+      PARAMETER (NP=3,NMAX=100)
+      DIMENSION A(NP,NP),D(NP),V(NP,NP),B(NMAX),Z(NMAX)
+      
+      SUM11=0.0D00
+      SUM12=0.0D00
+      SUM13=0.0D00
+      SUM22=0.0D00
+      SUM23=0.0D00
+      SUM33=0.0D00
+      
+      DO 1 I=1,nrods
+         SUM11=SUM11+EX(I)*EX(I)
+         SUM12=SUM12+EX(I)*EY(I)
+         SUM13=SUM13+EX(I)*EZ(I)
+         SUM22=SUM22+EY(I)*EY(I)
+         SUM23=SUM23+EY(I)*EZ(I)
+         SUM33=SUM33+EZ(I)*EZ(I)         
+    1 CONTINUE
+      
+      A(1,1)=SUM11/XN_rods
+      A(1,2)=SUM12/XN_rods
+      A(1,3)=SUM13/XN_rods
+      A(2,1)=A(1,2)
+      A(2,2)=SUM22/XN_rods
+      A(2,3)=SUM23/XN_rods
+      A(3,1)=A(1,3)
+      A(3,2)=A(2,3)
+      A(3,3)=SUM33/XN_rods
+      
+!     write(*,*) 'ACUMULAS' 
+!     write(*,*) ACC(40), ACC(41), ACC(42)
+!     write(*,*) 'SUMAS', XN 
+!     write(*,*) A(1,1), A(1,2), A(1,3)  
+!     write(*,*) A(2,1), A(2,2), A(2,3)  
+!     write(*,*) A(3,1), A(3,2), A(3,3)  
+C     COMPUTE ALL EIGENVALUES AND EIGENVECTORS OF A REAL SYMMETRIC
+C     MATRIX A, WHICH IS OF SIZE N BY N, STORED IN A PHYSICAL NP BY NP
+C     ARRAY. D RETURNS THE EIGENVALUES OF A IN ITS FIRST N ELEMENTS.
+C     V IS A MATRIX CONTAINING THE EIGENVECTORS.
+C     (SEE PRESS ET AL., "NUMERICAL RECIPES", PAGE 348).
+C     ZERO VALUES
+     
+      DO 12 IP=1,NP
+         DO 11 IQ=1,NP
+            V(IP,IQ)=0.0D00
+ 11      CONTINUE
+         V(IP,IP)=1.0D00
+ 12   CONTINUE
+
+C     INITIALIZE D AND B TO THE DIAGONAL OF A
+
+      DO 13 IP=1,NP
+         B(IP)=A(IP,IP)
+         D(IP)=B(IP)
+         Z(IP)=0.0D00
+ 13   CONTINUE
+
+      NROT=0
+
+      DO 24 I=1,50
+         SM=0.0D00
+C     SUM OFF-DIAGONAL ELEMENTS
+         DO 15 IP=1,NP-1
+            DO 14 IQ=IP+1,NP
+               SM=SM+DABS(A(IP,IQ))
+ 14         CONTINUE
+ 15      CONTINUE
+C     CONDITION FOR MACHINE CONVERGENCE AND EXIT
+         
+         IF (SM.EQ.0.0D00) GOTO 99
+         IF (I.LT.4) THEN
+            TRESH=0.2D00*SM/DFLOAT(NP)**2.0D00
+         ELSE
+            TRESH=0.0D00
+         ENDIF
+         
+         DO 22 IP=1,NP-1
+            DO 21 IQ=IP+1,NP
+               GOL=100.D00*DABS(A(IP,IQ))
+               IF ((I.GT.4).AND.(DABS(D(IP))+GOL.EQ.DABS(D(IP)))
+     +              .AND.(DABS(D(IQ))+GOL.EQ.DABS(D(IQ)))) THEN
+                  A(IP,IQ)=0.0D00
+               ELSE IF (DABS(A(IP,IQ)).GT.TRESH) THEN
+                  H=D(IQ)-D(IP)
+                  IF (DABS(H)+GOL.EQ.DABS(H)) THEN
+                     T=A(IP,IQ)/H
+                  ELSE
+                     THETA=0.5D00*H/A(IP,IQ)
+                     T=1.0D00/(DABS(THETA)+DSQRT(1.0D00+THETA**2))
+                     IF (THETA.LT.0.0D00) T=-T
+                  ENDIF
+                  C=1.0D00/DSQRT(1.0D00+T*T)
+                  SO=T*C
+                  TAU=SO/(1.0D00+C)
+                  H=T*A(IP,IQ)
+                  Z(IP)=Z(IP)-H
+                  Z(IQ)=Z(IQ)+H
+                  D(IP)=D(IP)-H
+                  D(IQ)=D(IQ)+H
+                  A(IP,IQ)=0.0D00
+                  DO 16 J=1,IP-1
+                     GOL=A(J,IP)
+                     H=A(J,IQ)
+                     A(J,IP)=GOL-SO*(H+GOL*TAU)
+                     A(J,IQ)=H+SO*(GOL-H*TAU)
+ 16               CONTINUE
+                  DO 17 J=IP+1,IQ-1
+                     GOL=A(IP,J)
+                     H=A(J,IQ)
+                     A(IP,J)=GOL-SO*(H+GOL*TAU)
+                     A(J,IQ)=H+SO*(GOL-H*TAU)
+ 17               CONTINUE
+                  DO 18 J=IQ+1,NP
+                     GOL=A(IP,J)
+                     H=A(IQ,J)
+                     A(IP,J)=GOL-SO*(H+GOL*TAU)
+                     A(IQ,J)=H+SO*(GOL-H*TAU)
+ 18               CONTINUE
+                  DO 19 J=1,NP
+                     GOL=V(J,IP)
+                     H=V(J,IQ)
+                     V(J,IP)=GOL-SO*(H+GOL*TAU)
+                     V(J,IQ)=H+SO*(GOL-H*TAU)
+ 19               CONTINUE
+                  NROT=NROT+1
+               ENDIF
+ 21         CONTINUE
+ 22      CONTINUE
+         DO 23 IP=1,NP
+            B(IP)=B(IP)+Z(IP)
+            D(IP)=B(IP)
+            Z(IP)=0.0D00
+ 23      CONTINUE
+ 24   CONTINUE
+!      PAUSE '50 ITERATIONS SHOULD NEVER HAPPEN'
+C     SORTS TO PUT THE EIGENVALUES INTO ASCENDING ORDER, AND TO 
+C     REARRANGE THE COLUMNS OF V
+
+ 99   DO 27 I=1,NP-1
+         K=I
+         P=D(I)
+         DO 25 J=I+1,NP
+            IF (D(J).GE.P) THEN
+               K=J
+               P=D(J)
+            ENDIF
+ 25      CONTINUE
+         IF (K.NE.I) THEN
+            D(K)=D(I)
+            D(I)=P
+            DO 26 J=1,NP
+               P=V(J,I)
+               V(J,I)=V(J,K)
+               V(J,K)=P
+ 26         CONTINUE
+         ENDIF
+ 27   CONTINUE
+C     EIGENVALUES OF MATRIX Q THE ORDERING TENSOR (IN DECREASING ORDER)
+C     Q=A-1/2
+
+      EIGVA1=3.0D00/2.0D00*D(1)-0.5D00
+      EIGVA2=3.0D00/2.0D00*D(2)-0.5D00
+      EIGVA3=3.0D00/2.0D00*D(3)-0.5D00
+
+C     CALCULATE ORDER PARAMETER, P2
+
+      P2=EIGVA1
+
+C     DIRECTOR (EIGENVECTOR V(I,1)), ASSOCIATED WITH EIGENVALUE 1
+
+      DIX=V(1,1)
+      DIY=V(2,1)
+      DIZ=V(3,1)
+
+      RETURN
+      END
+
+*************************************************************
+*************************************************************
+
+      SUBROUTINE FINISH(IWRITE)
+
+C     SUBROUTINE FINISH (CLEARING UP)
+C     SAVE THE FINAL CONFIGURATION AND ACCUMULATORS
+
+      INCLUDE 'mcnptv06.inc'
+
+      NNEW=10
+
+      IF(IWRITE.ne.1.OR.MOD(NCOUNT,NNEW*NSUB).eq.0) THEN
+
+         OPEN(UNIT=4,FILE='snapshot.new',STATUS='unknown')
+
+C     NUMBER OF PARTICLES
+
+         WRITE(4,*) N,nrods,nsph
+
+C     SPHEROCYLINDER L*
+
+C     FINAL INCREMENTS
+
+         WRITE(4,*) DISPL_R,DISPLS, DISPTH, DISPLS
+         write(4,*) XC,YC,ZC
+
+C     FINAL CONFIGURATION
+
+         DO 1 I=1,N
+            WRITE(4,7788) RX(I),RY(I),RZ(I),xloverd(I)
+ 1       CONTINUE
+
+C     DIRECTION COSINES OF THE MOLECULAR AXIS
+
+         DO 2 I=1,N
+            WRITE(4,*) EX(I),EY(I),EZ(I)
+ 2       CONTINUE
+
+         NHISTE=NINT(XHISTE)
+
+         DO 5 I=1,NHISTE
+            RHOI=RHOSTA+(RHOEND-RHOSTA)/XHISTE*(DFLOAT(I-1)+0.5)
+ 5       CONTINUE
+
+         CLOSE(4)
+         
+      ENDIF
+
+
+      IF (IWRITE.EQ.1) RETURN
+C     PRINT OUT
+
+      WRITE(49,*) ' '
+      write(49,*) ' FINAL BOX DIMENSIONS',XC,YC,ZC
+
+      VOLUME=XC*YC*ZC
+
+      WRITE(49,*) ' FINAL VOLUME=',VOLUME
+      WRITE(49,*) ' FINAL RHO=',XN/VOLUME
+      WRITE(49,*) ' FINAL ETA=',XN/VOLUME*VM
+      WRITE(49,*) ' FINAL ETOTAL=',ETOTAL/XN
+
+      IF (LORDER) THEN
+         CALL ORDER
+         WRITE(49,*) ' FINAL VALUE OF THE ORDER PARAMETER P2=',P2
+         WRITE(49,*) ' FINAL DIRECTION VECTOR'
+         WRITE(49,*) DIX,DIY,DIZ
+      END IF
+
+      WRITE(49,104) NCALLN
+
+ 104  FORMAT(/,1X,'NEIGHBOUR LISTS CONSTRUCTED ',I7,' TIMES',/)
+ 7788 FORMAT(1X,4(6x,F24.16))
+
+      RETURN
+      END
+
+***********************************************
+************************************************
+      SUBROUTINE BONDSET64(bond6,bond4)
+
+C     SUBROUTINE TO CHECK FOR HEXAGONAL AND SQUARE PACKING WITHIN SMECTIC LAYERS
+*     
+      INCLUDE 'mcnptv06.inc'
+      dimension ndis(npart)
+
+
+c     cilindro que  abarquela primera celda de coordinacion
+      xlimra = 2.56d0
+      xlimh = 1.d0
+*     if(rpersqj.gt.xlimra.or.rparsqj.gt.xlimh) goto 20
+
+c     numero de pares que vamos a testar, se inicializa
+
+      np=0
+
+
+      realbond6=0.d0
+      ximgbond6=0.d0
+      realbond4=0.d0
+      ximgbond4=0.d0
+
+c     para cada particula inicializamos y empezamos a buscar dos mas que
+c     esten en un cilindro determinado
+
+*     do 10 i=1,n
+      do 10 i=1,n-2
+
+         rxi=rx(i)
+         ryi=ry(i)
+         rzi=rz(i)
+c     numero de pares asociados a i
+         nbi=0
+
+c     acumuladores de i
+         realparhexa=0.d0
+         ximgparhexa=0.d0
+         realpartetra=0.d0
+         ximgpartetra=0.d0
+
+         do m=1,n
+            ndis(m)=1
+         enddo
+c     contruimos un triangulo con vertice en i, j y k
+
+*     do 20 j=1,n
+         do 20 j=i+1,n-1
+            if (ndis(j).eq.0) goto 20
+
+            rxij=rx(j)-rxi
+            ryij=ry(j)-ryi
+            rzij=rz(j)-rzi
+
+c     MINIMUM IMAGE CONVENTION
+            IF (RXIJ.LT.-XC2) THEN
+               RXIJ=RXIJ+XC
+            ELSEIF (RXIJ.GE.XC2) THEN
+               RXIJ=RXIJ-XC
+            ENDIF
+            IF (RYIJ.LT.-YC2) THEN
+               RYIJ=RYIJ+YC
+            ELSEIF (RYIJ.GE.YC2) THEN
+               RYIJ=RYIJ-YC
+            ENDIF
+            IF (RZIJ.LT.-ZC2) THEN
+               RZIJ=RZIJ+ZC
+            ELSEIF (RZIJ.GE.ZC2) THEN
+               RZIJ=RZIJ-ZC
+            ENDIF
+            rr=rxij*rxij+ryij*ryij+rzij*rzij
+
+            rparj=abs(rxij*dix+ryij*diy+rzij*diz)
+            rparsqj=rparj*rparj
+
+            rperxj=rxij-rparj*dix
+            rperyj=ryij-rparj*diy
+            rperzj=rzij-rparj*diz
+
+            rpersqj=rperxj*rperxj+rperyj*rperyj+rperzj*rperzj
+            rperj=dsqrt(rpersqj)
+
+
+c     sino esta en el cilindro no cuenta
+            if(rpersqj.gt.xlimra.or.rparsqj.gt.xlimh) then
+               ndis(j)=0
+               goto 20
+            endif
+            do 40 k=j+1,n
+*     write(*,*) i,j,k,ndis(k)
+*     do 40 k=1,n
+               if (ndis(k).eq.0) goto 40
+
+c     tercer vertice
+
+               rxik=rx(k)-rxi
+               ryik=ry(k)-ryi
+               rzik=rz(k)-rzi
+
+C     MINIMUM IMAGE CONVENTION
+               IF (RXIk.LT.-XC2) THEN
+                  RXIk=RXIk+XC
+               ELSEIF (RXIk.GE.XC2) THEN
+                  RXIk=RXIk-XC
+               ENDIF
+               IF (RYIk.LT.-YC2) THEN
+                  RYIk=RYIk+YC
+               ELSEIF (RYIk.GE.YC2) THEN
+                  RYIk=RYIk-YC
+               ENDIF
+               IF (RZIk.LT.-ZC2) THEN
+                  RZIk=RZIk+ZC
+               ELSEIF (RZIk.GE.ZC2) THEN
+                  RZIk=RZIk-ZC
+               ENDIF
+               rpark=abs(rxik*dix+ryik*diy+rzik*diz)
+               rparsqk=rpark*rpark
+
+               rperxk=rxik-rpark*dix
+               rperyk=ryik-rpark*diy
+               rperzk=rzik-rpark*diz
+
+               rpersqk=rperxk*rperxk+rperyk*rperyk+rperzk*rperzk
+               rperk=dsqrt(rpersqk)
+c     sino esta en el cilindro no cuentq
+               if(rpersqk.gt.xlimra.or.rparsqk.gt.xlimh) then
+                  ndis(k)=0
+                  goto 40
+               endif
+c     si j y k estan en el cilindro cuenta el par
+               nbi=nbi+1
+
+
+c     si ha llegado hasta aqui las j i k estan en un cilindro
+c     de radio**2 xlimar y 2.altura**2 xlimh
+
+c     calculamos el angulo entre rperj y rperk
+c     angulo entre ij^ik
+
+               sp=rperxj*rperxk+rperyj*rperyk+rperzj*rperzk
+
+c     como lo quiero en primer o segundo cuadrante me quedo
+c     con el angulo que me de el coseno
+
+               costh=sp/(rperk*rperj)
+               theta=dacos(costh)
+
+               cos6th=dcos(theta*6.d0)
+               sen6th=dsin(theta*6.d0)
+               cos4th=dcos(theta*4.d0)
+               sen4th=dsin(theta*4.d0)
+
+c     se acumulan la parte real e imaginaria para cada i
+
+               realparhexa=realparhexa+cos6th
+               ximgparhexa=ximgparhexa+sen6th
+               realpartetra=realpartetra+cos4th
+               ximgpartetra=ximgpartetra+sen4th
+*     write(*,*) i,j,k,theta,costh,sp,rperk,rperj,nbi
+ 40         continue
+ 20      continue
+         if(nbi.eq.0) goto 10
+
+c     se normaliza cada i  y se suman
+         realbond6=realbond6+1.d0/dfloat(nbi)*(realparhexa)
+         ximgbond6=ximgbond6+1.d0/dfloat(nbi)*(ximgparhexa)
+
+         realbond4=realbond4+1.d0/dfloat(nbi)*(realpartetra)
+         ximgbond4=ximgbond4+1.d0/dfloat(nbi)*(ximgpartetra)
+*     write(*,*) nbi,re
+*     write(*,*) nbi,realbond4,imgbond6,122,i,n1,n2
+         np=np+1
+ 10   continue
+c     se calcula el modulo y se normaliza
+      if(np.ne.0) then
+         realbond6=realbond6/dfloat(Np)
+         ximgbond6=ximgbond6/dfloat(np)
+         realbond4=realbond4/dfloat(Np)
+         ximgbond4=ximgbond4/dfloat(np)
+      else
+         realbond6=0.d0
+         ximgbond6=0.d0
+         realbond4=0.d0
+         ximgbond4=0.d0
+      endif
+
+      bond6=dsqrt(realbond6*realbond6+ximgbond6*ximgbond6)
+      bond4=dsqrt(realbond4*realbond4+ximgbond4*ximgbond4)
+
+*     write(*,*) np,bond_6,realbond6,ximgbond6,bond_4,123
+
+      return
+      end
+      
+      
+c ==================================================================
+       Subroutine ExtraEnergy(I, X_IN,Y_IN,Z_IN,EX_IN,EY_IN,EZ_IN,
+     &                       UD_OUT,URF_OUT,USW_OUT);
+      INCLUDE 'mcnptv06.inc'
+      integer I;
+      real(8), intent(in) :: X_IN,Y_IN, Z_IN, EX_IN,EY_IN,EZ_IN;
+      real(8), intent(out) :: UD_OUT, URF_OUT, USW_OUT;
+     
+c     ----  Asignar valores de variables------
+      XLAM=1.0D00; s=1.0D00; RFC=0.50D00*XC; 
+      RFC3= RFC*RFC*RFC; XMU=1.0D00; epsrf=1.5D00;
+      RFCS=RFC
+     
+c    ------------------------------------------
+      USW_OUT=0.0D00; 
+C      calcula la energia de la particula I 
+C     en su nueva configuracion
+C     La energia esta escalada con epsilon
+      DO  J=1,N  ! Aquí iniciará nuestra rutina
+         IF (J == I) then
+          cycle
+         End If
+         X=RX(J)-X_IN
+         Y=RY(J)-Y_IN
+         Z=RZ(J)-Z_IN
+         RR=X*X+Y*Y+Z*Z
+         
+c     CALCULO DE LA ENERGIA DIPOLAR
+         UDNEW=0.0D0
+         RNORM=SQRT(RR)
+         IF(RFCS.LT.RNORM) THEN
+         UD_OUT = 0.0d0 
+         URF_OUT = 0.0d0
+         ELSE
+         XR=X/RNORM
+         YR=Y/RNORM
+         ZR=Z/RNORM
+         X1=EX_IN*XR +EY_IN*YR +EZ_IN*ZR
+         X2=EX(J)*XR +EY(J)*YR +EZ(J)*ZR
+         X3=EX_IN*EX(J) +EY_IN*EY(J) +EZ_IN*EZ(J)
+        
+c        RNORM=RNORM/S
+         UD_OUT=-XMU*XMU*(3.0D0*X1*X2-X3)/(RNORM*RNORM*RNORM)
+         URF_OUT = -2.d0*X3*(epsrf-1.0d0)/(2.0d0*epsrf+1.0d0)
+         URF_OUT = URF_OUT/RFC3
+         end if
+         
+c         write(*,*) X3
+
+         USW_OUT=USW_OUT+UD_OUT+URF_OUT
+c         write(*,*) RNORM, RFCS
+c         write(*,*) UD_OUT
+c         write(*,*) "U**",I, USW_OUT, UD_OUT, URF_OUT;
+
+c          write(*,*) "X3:", X3;
+        End Do ! Aquí termina nuestra rutina
+        End Subroutine ExtraEnergy
+     
