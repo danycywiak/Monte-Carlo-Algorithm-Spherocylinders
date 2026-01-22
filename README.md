@@ -1,6 +1,11 @@
 # Monte-Carlo-Algorithm-Spherocylinders
 Fortran Code: Monte Carlo Algorithm Spherocylinders
 
+# Results
+<p align="center">
+  <img src="Rsult/1.jpg" width="520">
+</p>
+
 
 # Dynamic Monte Carlo (DMC) / MC NPT simulations with dipolar rods (Fortran 77)
 
