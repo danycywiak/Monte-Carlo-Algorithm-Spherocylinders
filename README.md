@@ -15,7 +15,7 @@ Fortran Code: Monte Carlo Algorithm Spherocylinders
 </p>
 
 
-# Dynamic Monte Carlo (DMC) / MC NPT simulations with dipolar rods (Fortran 77)
+# Dynamic Monte Carlo (DMC) / MC NVT simulations with dipolar rods (Fortran 77)
 
 This repository contains the Fortran code developed during my PhD to run Monte Carlo simulations (NVT/NPT) of spherocylindrical rod-like particles including dipolar interactions (reaction-field / long-range handling implemented in the code).
 
